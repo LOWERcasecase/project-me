@@ -490,6 +490,7 @@ function activeSeason() {
 let glassId = null, glassSeason = null;
 function applyGlass(forceId) {
   const aside = document.querySelector("aside"); if (!aside) return;
+  if (!document.querySelector('link[rel="stylesheet"][href="theme.css"]')) return; // plain look: no stained glass or seasons
   const season = activeSeason(); document.documentElement.dataset.season = season;
   const GLASS = buildGlass(SEASON_GLASS[season]);
   let g = forceId && GLASS.find((x) => x.id === forceId);
@@ -2008,11 +2009,11 @@ pages.settings = () => `
     <div class="row" style="margin-top:10px"><button class="btn sm" data-act="garmin-refresh">Refresh Garmin data</button></div>
     ${Object.keys(garmin.shapes || {}).length ? `<details style="margin-top:10px"><summary class="sub" style="cursor:pointer">Technical details (field names Garmin sent)</summary><pre style="white-space:pre-wrap;font-size:11px;margin-top:6px">${esc(JSON.stringify(garmin.shapes, null, 1))}</pre></details>` : ""}
   </div>
-  <div class="box" style="margin-top:14px">
+  ${document.querySelector('link[rel="stylesheet"][href="theme.css"]') ? "" : "<!--"}<div class="box" style="margin-top:14px">
     <h3>Season colours</h3>
     <p class="sub" style="font-size:14px">The colours turn with the Wheel of the Year: spring from Ostara (20 Mar), summer from Litha (21 Jun), autumn from Mabon (22 Sep), winter from Yule (21 Dec). Now showing: <b>${activeSeason()[0].toUpperCase() + activeSeason().slice(1)}</b>.</p>
     <div class="row" style="margin-top:10px"><select data-act="season-theme" style="width:auto">${[["", "Follow the seasons"], ["winter", "Always winter"], ["spring", "Always spring"], ["summer", "Always summer"], ["autumn", "Always autumn"]].map(([v, l]) => `<option value="${v}" ${(state.seasonTheme || "") === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
-  </div>
+  </div>${document.querySelector('link[rel="stylesheet"][href="theme.css"]') ? "" : "-->"}
   <div class="box" style="margin-top:14px">
     <h3>Backup</h3>
     <p class="sub" style="font-size:14px">Download everything you've entered as a file, or restore from one. Your database also keeps a daily backup automatically.</p>

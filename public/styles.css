@@ -16,6 +16,11 @@
   --bad: #c43c3b;
   --radius: 14px;
   --shadow: 0 6px 22px rgba(0,0,0,.07);
+  /* life-domain colours (colour-blind checked) and accents used by newer pages */
+  --d-family: #e87ba4; --d-health: #eb6834; --d-finances: #1baf7a; --d-career: #2a78d6;
+  --d-degree: #6250d6; --d-travel: #eda100; --d-community: #008300;
+  --brass: #2a78d6; --copper: #eb6834; --moss: #1a7f4b; --moon-ink: #6250d6;
+  --neutral-series: #8a8f98; --cal-key: #3d4450;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -34,6 +39,10 @@
     --warn: #e0a030;
     --bad: #e66767;
     --shadow: 0 6px 22px rgba(0,0,0,.35);
+    --d-family: #d55181; --d-health: #d95926; --d-finances: #199e70; --d-career: #3987e5;
+    --d-degree: #9085e9; --d-travel: #c98500; --d-community: #2e9a3a;
+    --brass: #3987e5; --copper: #e0763f; --moss: #3fbf7f; --moon-ink: #9085e9;
+    --neutral-series: #8e939b; --cal-key: #8e939b;
   }
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -508,3 +517,17 @@ ul.rlib { list-style: none; }
 }
 details.blk-links { margin-top: 6px; font-size: 13px; }
 details.blk-links > summary { cursor: pointer; color: var(--muted); }
+
+/* moon & wheel (plain look) */
+.moon .moon-dark { fill: color-mix(in srgb, var(--moon-ink) 18%, var(--panel-2)); }
+.moon .moon-lit { fill: #f1efe6; }
+.moon .moon-rim { fill: none; stroke: color-mix(in srgb, var(--moon-ink) 50%, transparent); stroke-width: 1; }
+.wheel-card.is-sabbat { background: linear-gradient(135deg, color-mix(in srgb, var(--copper) 8%, var(--panel)), var(--panel) 55%); }
+.blessed { font-style: italic; color: var(--copper); }
+.tg-ev.blk { background: color-mix(in srgb, var(--ec) 16%, var(--panel)); color: var(--text-2); border-left: 3px solid var(--ec); }
+.tg-ev.done { opacity: .62; }
+.tg-ev.short { padding: 1px 6px; justify-content: center; }
+.tg-ev.short b { -webkit-line-clamp: 1; font-size: 11px; }
+.tg-ev.ink { color: #1c1f23; }
+.tg-ev b { font-weight: 600; font-size: 12px; line-height: 1.2; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tg-scroll { height: calc(100vh - 250px); min-height: 480px; }
