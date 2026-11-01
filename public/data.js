@@ -44,9 +44,54 @@ window.PLAN = {
     { id: "health",    name: "Health, Wellness & Fitness", short: "Health",    color: "#eb6834" },
     { id: "finances",  name: "Finances",                  short: "Finances",  color: "#1baf7a" },
     { id: "career",    name: "Career",                    short: "Career",    color: "#2a78d6" },
-    { id: "degree",    name: "Degree & Education",        short: "Education", color: "#6250d6" },
+    { id: "degree",    name: "Degree & Self Study",       short: "Degree & Self Study", color: "#6250d6" },
     { id: "travel",    name: "Travel & Experiences",      short: "Travel",    color: "#eda100" },
     { id: "community", name: "Community & Giving Back",   short: "Community", color: "#008300" },
+  ],
+
+  // PART 1 of the plan, for the About Me page
+  about: {
+    intro: [
+      "I'm the eldest of four kids, born in California and raised across Texas and Georgia after several moves before I even turned 10. Money was tight; my dad was often gone for work and later struggled with addiction, so my mom held things together mostly on her own. I learned early to expect instability and to be independent.",
+      "I joined the Air Force partly to put distance between myself and a family situation that wasn't working, and partly to build something steadier. Since then I've been stationed at Travis, deployed twice to the Middle East, and lived in Turkey, Okinawa, Grand Forks, Belgium, and now Germany. Moving every 3-4 years is normal for me now, even though I want real roots eventually.",
+      "I got married in 2022. My wife and our dogs are my closest family. Of my siblings, I'm closest with Allie, the youngest. My relationship with my parents is distant: a serious falling-out with my mom, and a strained one with my dad going back years. I lost a younger sibling to an overdose, which fractured things further. I've mostly been on my own since young adulthood. I'm at peace with that, but I want what I build going forward to be more stable, and more chosen, than what I grew up in.",
+    ],
+    goals: [
+      ["What we'll have", [
+        ["Land of our own, in Germany or Canada", "Germany: Berlin / northern or southern Germany, where it's cooler. Canada: Newfoundland / Quebec / Toronto area. The dream: plenty of land, with room for the pocket neighborhood."],
+        ["A paid-off home", "Realistic: one paid-off home. The dream: two, one in the US (closer to the family who live there) and one outside the US."],
+        ["A paid-off vehicle", "Realistic: one paid-off car. The dream: a paid-off car plus a paid-off 4x4 to run around in."],
+        ["A pocket neighborhood", "Enough land for friends and family to live nearby, in unity, making and building things together."],
+        ["A little handmade shop", "Honey, produce, mead. It exists because we enjoy making things, not because we need the income."],
+      ]],
+      ["How we'll live", [
+        ["Financial security that doesn't need constant active management", ""],
+        ["Living because we want to", "Existing on our own terms, not as slaves to the money (anymore)."],
+      ]],
+      ["What I'll leave behind", [
+        ["Stability, not a burden", "Proof that where I came from didn't have to be where it ended. I want the people I love to have a place to land: our home, our land, room for the family I've chosen even where the family I was born into fell short."],
+        ["A reputation for showing up", "I want to be remembered as present, reliable, and thoughtful, someone who showed up, even for the relationships that were hard, even when it wasn't returned in kind."],
+      ]],
+    ],
+    domainsWhy: "These seven domains are where I put deliberate effort, on purpose, since growing up nothing about my life felt like it was happening on purpose. No single one is allowed to grow at the expense of the others. Keeping all seven in view at once is how I make sure the stable life I'm building is actually a whole life, not just a well-funded one.",
+  },
+
+  // People named in the plan. Only what the plan says is filled in; add the rest on the Contacts page.
+  contacts: [
+    { name: "Amanda", category: "family", notes: "My wife." },
+    { name: "Allie", category: "family", notes: "My youngest sibling; the one I'm closest to. Visiting 17-30 Dec 2026." },
+    { name: "Dan", category: "family", notes: "Visiting 22-29 Dec 2026." },
+    { name: "Donna", category: "family", notes: "Visiting 22-29 Dec 2026." },
+    { name: "Larry", category: "family", notes: "Visiting 22-29 Dec 2026." },
+    { name: "Auntie Sue", category: "family", notes: "Visiting 22-29 Dec 2026." },
+    { name: "Lucian Dake", category: "family", notes: "Godson (about 7). Christmas gift ships to the US around 1 Dec." },
+    { name: "Sebastian Dake", category: "family", notes: "Godson (about 10). Christmas gift ships to the US around 1 Dec." },
+    { name: "Ashley", category: "close", notes: "Lucian and Sebastian's parent, with Chris." },
+    { name: "Chris", category: "close", notes: "Lucian and Sebastian's parent, with Ashley." },
+    { name: "Jackie", category: "close", notes: "Lives in England. Wedding in Puerto Rico, Nov-Dec 2023." },
+    { name: "Angel", category: "close", notes: "Visited Brussels with Jackie, Nov 2025." },
+    { name: "Stella", category: "pets", notes: "Our dog. Emergency fund goal $20,000 (Fidelity)." },
+    { name: "Taco", category: "pets", notes: "Our dog. Emergency fund goal $20,000 (Fidelity)." },
   ],
 
   guardrails: [
@@ -542,7 +587,9 @@ window.PLAN = {
     ],
     rule222Start: "2026-11-07",
     studyStart: "2026-09-07", // Year 1 began here; block 3 (after half-term) starts 2 Nov
-    bucket: [],
+    bucket: [],      // European bucket list (2026-2029)
+    bucketAll: [],   // my full bucket list
     countries: [],
+    meds: [],
   },
 };

@@ -1,28 +1,27 @@
 // Cloudflare Pages Function: saves and loads your ticks/check-ins at /api/state.
 // Storage: a KV namespace bound to this project with the variable name PROJECT_ME.
-// Cloudflare Access sits in front of the whole site, so only you can reach this.
+// The site login (functions/_middleware.js) sits in front of everything, so only you can reach this.
 
 const JSON_HEADERS = { "content-type": "application/json", "cache-control": "no-store" };
 
-// Extra safety net: if Access is ever switched off by mistake, refuse to serve data.
-// Set an environment variable ALLOWED_EMAILS (comma-separated) in the Pages project
-// to also check WHO is signed in. Leave it unset to just require any Access login.
-function allowed(request, env) {
-  const email = (request.headers.get("cf-access-authenticated-user-email") || "").toLowerCase();
-  if (!email) return false;
-  if (!env.ALLOWED_EMAILS) return true;
-  return env.ALLOWED_EMAILS.toLowerCase().split(",").map((s) => s.trim()).includes(email);
-}
+// The login in functions/_middleware.js signs you in and puts your name in data.user.
+const allowed = (data) => !!(data && data.user);
+const privKey = (user) => `private:${String(user).toLowerCase()}`;
 
-export async function onRequestGet({ request, env }) {
-  if (!allowed(request, env)) return new Response(JSON.stringify({ error: "not signed in" }), { status: 401, headers: JSON_HEADERS });
+export async function onRequestGet({ request, env, data }) {
+  if (!allowed(data)) return new Response(JSON.stringify({ error: "not signed in" }), { status: 401, headers: JSON_HEADERS });
   if (!env.PROJECT_ME) return new Response(JSON.stringify({ error: "KV binding PROJECT_ME missing" }), { status: 500, headers: JSON_HEADERS });
   const value = await env.PROJECT_ME.get("state");
-  return new Response(value || "{}", { headers: JSON_HEADERS });
+  const shared = value ? JSON.parse(value) : {};
+  // each person's private part (journal, mood, cycle, meds) is stored on its own and only handed to its owner
+  const priv = await env.PROJECT_ME.get(privKey(data.user));
+  shared.priv = priv ? JSON.parse(priv) : {};
+  shared.privOwner = data.user;
+  return new Response(JSON.stringify(shared), { headers: JSON_HEADERS });
 }
 
-export async function onRequestPut({ request, env }) {
-  if (!allowed(request, env)) return new Response(JSON.stringify({ error: "not signed in" }), { status: 401, headers: JSON_HEADERS });
+export async function onRequestPut({ request, env, data }) {
+  if (!allowed(data)) return new Response(JSON.stringify({ error: "not signed in" }), { status: 401, headers: JSON_HEADERS });
   if (!env.PROJECT_ME) return new Response(JSON.stringify({ error: "KV binding PROJECT_ME missing" }), { status: 500, headers: JSON_HEADERS });
   const body = await request.text();
   if (body.length > 5_000_000) return new Response(JSON.stringify({ error: "too large" }), { status: 413, headers: JSON_HEADERS });
@@ -40,6 +39,13 @@ export async function onRequestPut({ request, env }) {
     if (previous) await env.PROJECT_ME.put(backupKey, previous, { expirationTtl: 60 * 24 * 3600 });
   }
 
-  await env.PROJECT_ME.put("state", body);
+  // split off the private part so it is never shared with the other login
+  const priv = parsed.priv; delete parsed.priv; const owner = parsed.privOwner; delete parsed.privOwner;
+  if (priv && typeof priv === "object" && owner === data.user) {
+    const pk = privKey(data.user);
+    if (!(await env.PROJECT_ME.get(`${pk}:backup:${day}`))) { const prev = await env.PROJECT_ME.get(pk); if (prev) await env.PROJECT_ME.put(`${pk}:backup:${day}`, prev, { expirationTtl: 60 * 24 * 3600 }); }
+    await env.PROJECT_ME.put(pk, JSON.stringify(priv));
+  }
+  await env.PROJECT_ME.put("state", JSON.stringify(parsed));
   return new Response(JSON.stringify({ ok: true, savedAt: Date.now() }), { headers: JSON_HEADERS });
 }

@@ -4,12 +4,8 @@
 
 const JSON_HEADERS = { "content-type": "application/json", "cache-control": "no-store" };
 
-function allowed(request, env) {
-  const email = (request.headers.get("cf-access-authenticated-user-email") || "").toLowerCase();
-  if (!email) return false;
-  if (!env.ALLOWED_EMAILS) return true;
-  return env.ALLOWED_EMAILS.toLowerCase().split(",").map((s) => s.trim()).includes(email);
-}
+// The login in functions/_middleware.js signs you in and puts your name in data.user.
+const allowed = (data) => !!(data && data.user);
 
 /* ---------- time zones ---------- */
 function tzOffsetMs(tz, utcMs) {
@@ -100,8 +96,8 @@ function expand(start, rrule, untilMs, toUtc, maxN = 1500) {
   return out;
 }
 
-export async function onRequestGet({ request, env }) {
-  if (!allowed(request, env)) return new Response(JSON.stringify({ error: "not signed in" }), { status: 401, headers: JSON_HEADERS });
+export async function onRequestGet({ request, env, data }) {
+  if (!allowed(data)) return new Response(JSON.stringify({ error: "not signed in" }), { status: 401, headers: JSON_HEADERS });
   const feeds = (env.GCAL_FEEDS || "").split(/[\s,]+/).filter((u) => /^https:\/\//.test(u));
   if (!feeds.length) return new Response(JSON.stringify({ connected: false, calendars: [], events: [] }), { headers: JSON_HEADERS });
   const url = new URL(request.url);

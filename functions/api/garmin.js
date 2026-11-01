@@ -6,12 +6,8 @@ const JSON_HEADERS = { "content-type": "application/json", "cache-control": "no-
 const BASE = "https://personal.connectapi.garmin.com";
 const TOKEN_PATH = "/personalapitoken-service/personal-api/personal-api-key/token";
 
-function allowed(request, env) {
-  const email = (request.headers.get("cf-access-authenticated-user-email") || "").toLowerCase();
-  if (!email) return false;
-  if (!env.ALLOWED_EMAILS) return true;
-  return env.ALLOWED_EMAILS.toLowerCase().split(",").map((s) => s.trim()).includes(email);
-}
+// The login in functions/_middleware.js signs you in and puts your name in data.user.
+const allowed = (data) => !!(data && data.user);
 const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: JSON_HEADERS });
 
 function jwtExp(t) {
@@ -45,8 +41,8 @@ function deepPick(o, keys, depth = 3) {
 const dateOf = (r) => String(deepPick(r, ["calendarDate", "summaryDate", "date", "calendarDateString", "startDate", "startDateLocal"], 2) || "").slice(0, 10);
 const num = (v) => (v == null || v === "" || isNaN(Number(v)) ? null : Number(v));
 
-export async function onRequestGet({ request, env }) {
-  if (!allowed(request, env)) return json({ error: "not signed in" }, 401);
+export async function onRequestGet({ request, env, data }) {
+  if (!allowed(data)) return json({ error: "not signed in" }, 401);
   if (!env.GARMIN_API_KEY) return json({ connected: false });
   const url = new URL(request.url);
   const from = url.searchParams.get("from"), to = url.searchParams.get("to");
@@ -88,6 +84,12 @@ export async function onRequestGet({ request, env }) {
   put("restingHR", "summaries", ["restingHeartRate", "restingHR"]);
   put("sleepHours", "sleep", ["sleepTimeSeconds", "totalSleepSeconds", "sleepTimeInSeconds"], (v) => Math.round((v / 3600) * 10) / 10);
   put("sleepScore", "sleep", ["overallSleepScore", "sleepScore", "overall"]);
+  // bed and wake times: Garmin's "Local" timestamps are local clock time written as if it were UTC, so read them back as UTC
+  const hhmm = (ms) => new Date(ms).toISOString().slice(11, 16);
+  rows(raw.sleep).forEach((r) => { const d = dateOf(r); if (!d) return;
+    const st = num(deepPick(r, ["sleepStartTimestampLocal"])), en = num(deepPick(r, ["sleepEndTimestampLocal"]));
+    if (st) { day(d).sleepStart = hhmm(st); day(d).sleepStartDate = new Date(st).toISOString().slice(0, 10); }
+    if (en) day(d).sleepEnd = hhmm(en); });
   put("bbHigh", "bodyBattery", ["highest", "bodyBatteryHighestValue", "maxValue", "charged"]);
   put("bbLow", "bodyBattery", ["lowest", "bodyBatteryLowestValue", "minValue"]);
   put("hrv", "hrv", ["lastNightAvg", "lastNight", "hrvValue"]);

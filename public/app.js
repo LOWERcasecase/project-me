@@ -16,6 +16,7 @@ const addDays = (s, n) => { const d = parseD(s); d.setDate(d.getDate() + n); ret
 const addMonths = (s, n) => { const d = parseD(s); const day = d.getDate(); d.setDate(1); d.setMonth(d.getMonth() + n); const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(); d.setDate(Math.min(day, last)); return iso(d); };
 const daysBetween = (a, b) => Math.round((parseD(b) - parseD(a)) / 86400000);
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DOW_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const dowOf = (s) => DOW[parseD(s).getDay()];
 const fmt = (s, o = { day: "numeric", month: "short", year: "numeric" }) => s ? parseD(s).toLocaleDateString("en-GB", o) : "";
@@ -63,7 +64,23 @@ const blank = () => ({
   snapshots: [], rule222: { start: null, done: {} }, spaces: null,
   studyStart: null, studyDone: {}, bucket: null, countries: null,
   calendar: [], calHidden: null, reading: { books: {}, goals: {} }, garminSeen: {},
+  contacts: null, bucketAll: null, travels: null,
+  // private to whoever is signed in: the server keeps this part separately for each person
+  priv: {}, privOwner: null,
 });
+const PRIV = () => { const p = state.priv = state.priv || {}; p.journal = p.journal || {}; p.mood = p.mood || {}; p.cycle = p.cycle || { days: {} }; p.meds = p.meds || { list: null, log: {} }; return p; };
+/* who is signed in (from the login in functions/_middleware.js) */
+const me = { user: null };
+async function loadMe() {
+  if (!apiAvailable()) return;
+  try {
+    const r = await fetch("api/me", { cache: "no-store", credentials: "same-origin" });
+    if (r.status === 401) { location.href = "/"; return; }
+    const j = await r.json(); me.user = j.user || null;
+    if (me.user && state.privOwner && state.privOwner !== me.user) { state.priv = {}; } // someone else's private notes were on this device
+    if (me.user) state.privOwner = me.user;
+  } catch (e) {}
+}
 let state = blank();
 let sync = { status: "local", at: null, dirty: false };
 try { const s = JSON.parse(localStorage.getItem(LS_KEY)); if (s) state = Object.assign(blank(), s); } catch (e) {}
@@ -92,6 +109,7 @@ async function pullRemote() {
   if (!apiAvailable()) { setSync("local"); return; }
   try {
     const r = await fetch("api/state", { cache: "no-store", credentials: "same-origin" });
+    if (r.status === 401) { location.href = "/"; return; }
     if (!r.ok || !(r.headers.get("content-type") || "").includes("json")) throw new Error("no api");
     const remote = await r.json();
     if (remote && (remote.updatedAt || 0) > (state.updatedAt || 0)) {
@@ -174,19 +192,39 @@ function studyBlocks() {
 }
 const studyBlockOn = (date) => studyBlocks().find((b) => date >= b.start && date <= b.end);
 
+const WORK_START = "08:00";
+const isWeekday = (d) => { const n = parseD(d).getDay(); return n >= 1 && n <= 5; };
+const dishFor = (d, k) => ((P.menus[menuForDate(d)] || []).find((r) => r[0] === k) || [])[1];
+// Garmin: the sleep summary is filed under the morning you woke up
+const garminWake = (d) => (garmin.days[d] || {}).sleepEnd || null;
+const garminBed = (d) => (garmin.days[addDays(d, 1)] || {}).sleepStart || null;
 const HABITS = [
-  { id: "meals", label: "At or under macros", sub: (d) => { const m = menuForDate(d); const t = menuTotals(m); return `This week's menu ${m}: ${t.kcal} kcal in meals, ${P.macros.kcal} target (room for snacks)`; } },
-  { id: "meds", label: "Meds taken", sub: () => "Pill organizer + phone alarm" },
-  { id: "read", label: "Read", sub: () => { const c = allBooks().filter((b) => b.status === "reading"); return c.length ? c.map((b) => `${b.title} (${pctTxt(pctOf(b))})`).join(" · ") : "Nothing on the go — pick from your to-read pile"; } },
-  { id: "german", label: "German practice", sub: () => "30-60 minutes" },
-  { id: "study", label: "Study", sub: (d) => {
+  // morning routine
+  { id: "wake", group: "morning", label: "Wake up", time: true, garmin: garminWake, sub: (d) => garminWake(d) ? `From Garmin: ${garminWake(d)}` : "Pulled from Garmin when it syncs, or type it in" },
+  { id: "puppies", group: "morning", label: "Walk the puppies", sub: () => "Stella and Taco" },
+  { id: "breakfast", group: "morning", label: "Eat breakfast", sub: (d) => dishFor(d, "B") || "" },
+  { id: "meds", group: "morning", label: "Take meds", sub: () => "Pill organizer + phone alarm", link: ["#meds", "Meds tracker"] },
+  { id: "german", group: "morning", label: "Duo (German)", sub: () => "Duolingo · 30-60 minutes" },
+  { id: "work", group: "morning", label: "Make it to work on time", time: true, timeLabel: "Arrived", applies: isWeekday, sub: (d) => { const v = (state.checkins[d] || {}).workT; return v ? (v <= WORK_START ? `Arrived ${v}: on time` : `Arrived ${v}: after ${WORK_START}`) : `Work starts ${WORK_START}`; } },
+  // the middle of the day
+  { id: "meals", group: "midday", label: "At or under macros", sub: (d) => { const m = menuForDate(d); const t = menuTotals(m); return `This week's menu ${m}: ${t.kcal} kcal in meals, ${P.macros.kcal} target (room for snacks)`; } },
+  // evening routine (the workout row sits at the top of this group)
+  { id: "study", group: "evening", label: "Study", sub: (d) => {
       const b = studyBlockOn(d); const dn = dowOf(d);
       if (b && b.half) return "Half-term: flashcards only";
       const hrs = dn === "Sun" ? "4 hrs (2 per course)" : dn === "Sat" ? "Day off (or catch-up)" : "2 hrs (1 per course)";
       return b && !b.half ? `${hrs} · Block ${b.block}: ${b.courses}` : hrs;
     } },
+  { id: "journal", group: "evening", label: "Journal (at least 30 minutes)", sub: (d) => { const j = PRIV().journal[d]; return j && j.text ? `Written${j.mins ? ` · ${j.mins} min` : ""}` : "Write today's entry"; }, link: ["#journal", "Open journal"] },
+  { id: "read", group: "evening", label: "Read (at least 30 minutes)", sub: () => { const c = allBooks().filter((b) => b.status === "reading"); return c.length ? c.map((b) => `${b.title} (${pctTxt(pctOf(b))})`).join(" · ") : "Nothing on the go — pick from your to-read pile"; } },
+  { id: "sleep", group: "evening", label: "Go to sleep", time: true, garmin: garminBed, sub: (d) => garminBed(d) ? `From Garmin: ${garminBed(d)}` : "Pulled from Garmin the next morning, or type it in" },
 ];
-const habitDone = (date, id) => !!(state.checkins[date] && state.checkins[date][id]);
+const habitApplies = (h, d) => !h.applies || h.applies(d);
+const habitDone = (date, id) => {
+  if (state.checkins[date] && state.checkins[date][id]) return true;
+  const h = HABITS.find((x) => x.id === id);
+  return !!(h && h.garmin && h.garmin(date));
+};
 function streak(id) {
   let d = today(); if (!habitDone(d, id)) d = addDays(d, -1);
   let n = 0; while (habitDone(d, id) && n < 3650) { n++; d = addDays(d, -1); }
@@ -207,7 +245,7 @@ function workoutStreak() {
 }
 function checkinScore(date) {
   const s = activeSession(date);
-  const items = HABITS.map((h) => habitDone(date, h.id));
+  const items = HABITS.filter((h) => habitApplies(h, date)).map((h) => habitDone(date, h.id));
   if (s && s.text) items.push(!!state.sessions[s.key]);
   return { done: items.filter(Boolean).length, total: items.length };
 }
@@ -317,7 +355,8 @@ function lineChart(series, { height = 190, money: isMoney = true, yMin = null } 
 
 // Meeus, Astronomical Algorithms ch. 49 (main periodic terms)
 function moonPhaseJD(k) {
-  const T = k / 1236.85, rad = Math.PI / 180, full = Math.abs(k % 1) > 0.25;
+  const frac = Math.round((((k % 1) + 1) % 1) * 4) % 4; // 0 new, 1 first quarter, 2 full, 3 last quarter
+  const T = k / 1236.85, rad = Math.PI / 180, full = frac === 2;
   let jde = 2451550.09766 + 29.530588861 * k + 0.00015437 * T * T - 0.00000015 * T ** 3 + 0.00000000073 * T ** 4;
   const E = 1 - 0.002516 * T - 0.0000074 * T * T;
   const M = (2.5534 + 29.1053567 * k - 0.0000014 * T * T) * rad;
@@ -327,6 +366,9 @@ function moonPhaseJD(k) {
   const s = Math.sin;
   const c = full
     ? -0.40614 * s(Mp) + 0.17302 * E * s(M) + 0.01614 * s(2 * Mp) + 0.01043 * s(2 * Fa) + 0.00734 * E * s(Mp - M) - 0.00515 * E * s(Mp + M) + 0.00209 * E * E * s(2 * M) - 0.00111 * s(Mp - 2 * Fa) - 0.00057 * s(Mp + 2 * Fa) + 0.00056 * E * s(2 * Mp + M) - 0.00042 * s(3 * Mp) + 0.00042 * E * s(M + 2 * Fa) + 0.00038 * E * s(M - 2 * Fa) - 0.00024 * E * s(2 * Mp - M) - 0.00017 * s(Om)
+    : frac === 1 || frac === 3
+    ? -0.62801 * s(Mp) + 0.17172 * E * s(M) - 0.01183 * E * s(Mp + M) + 0.00862 * s(2 * Mp) + 0.00804 * s(2 * Fa) + 0.00454 * E * s(Mp - M) + 0.00204 * E * E * s(2 * M) - 0.0018 * s(Mp - 2 * Fa) - 0.0007 * s(Mp + 2 * Fa) - 0.0004 * s(3 * Mp) - 0.00034 * E * s(2 * Mp - M) + 0.00032 * E * s(M + 2 * Fa) + 0.00032 * E * s(M - 2 * Fa) - 0.00028 * E * E * s(Mp + 2 * M) + 0.00027 * E * s(2 * Mp + M) - 0.00017 * s(Om)
+      + (frac === 1 ? 1 : -1) * (0.00306 - 0.00038 * E * Math.cos(M) + 0.00026 * Math.cos(Mp) - 0.00002 * Math.cos(Mp - M) + 0.00002 * Math.cos(Mp + M) + 0.00002 * Math.cos(2 * Fa))
     : -0.4072 * s(Mp) + 0.17241 * E * s(M) + 0.01608 * s(2 * Mp) + 0.01039 * s(2 * Fa) + 0.00739 * E * s(Mp - M) - 0.00514 * E * s(Mp + M) + 0.00208 * E * E * s(2 * M) - 0.00111 * s(Mp - 2 * Fa) - 0.00057 * s(Mp + 2 * Fa) + 0.00056 * E * s(2 * Mp + M) - 0.00042 * s(3 * Mp) + 0.00042 * E * s(M + 2 * Fa) + 0.00038 * E * s(M - 2 * Fa) - 0.00024 * E * s(2 * Mp - M) - 0.00017 * s(Om);
   return jde + c - 69 / 86400; // TT -> UT (approx.)
 }
@@ -335,11 +377,12 @@ const jdToDate = (jd) => new Date((jd - 2440587.5) * 86400000);
 
 const SYN = 29.530588861;
 const kNear = (date) => Math.floor(((date - Date.UTC(2000, 0, 6)) / 86400000) / SYN);
-function moonEvents(a, b) {
+const PHASES = [["New moon", "●"], ["First quarter", "◐"], ["Full moon", "○"], ["Last quarter", "◑"]];
+function moonEvents(a, b, quarters = false) {
   const out = []; const k0 = kNear(parseD(a)) - 1, k1 = kNear(parseD(b)) + 1;
-  for (let k = k0; k <= k1; k++) for (const half of [0, 0.5]) {
-    const dt = jdToDate(moonPhaseJD(k + half)); const d = iso(dt);
-    if (d >= a && d <= b) out.push({ date: d, full: half === 0.5, time: `${pad(dt.getHours())}:${pad(dt.getMinutes())}` });
+  for (let k = k0; k <= k1; k++) for (const q of quarters ? [0, 1, 2, 3] : [0, 2]) {
+    const dt = jdToDate(moonPhaseJD(k + q / 4)); const d = iso(dt);
+    if (d >= a && d <= b) out.push({ date: d, full: q === 2, phase: q, name: PHASES[q][0], icon: PHASES[q][1], time: `${pad(dt.getHours())}:${pad(dt.getMinutes())}` });
   }
   return out.sort((x, y) => x.date.localeCompare(y.date));
 }
@@ -520,16 +563,25 @@ const ROUTES = [
   { id: "calendar", label: "Calendar", icon: "▦" },
   { id: "reading", label: "Reading", icon: "❦" },
   { id: "artifacts", label: "Artifacts", icon: "▤" },
-  { label: "Life domains" },
-  { id: "family", label: "Family", dom: "family" },
-  { id: "health", label: "Health", dom: "health" },
-  { id: "training", label: "Training", sub: true },
-  { id: "meals", label: "Meals & macros", sub: true },
+  { label: "Personal" },
+  { id: "about", label: "About Me", icon: "✦" },
+  { id: "journal", label: "Journal", icon: "✎" },
+  { label: "Life" },
+  { id: "family", label: "Family & Found Family", dom: "family" },
+  { id: "contacts", label: "Contacts", sub: true },
+  { id: "health", label: "Health, Wellness & Fitness", dom: "health" },
+  { id: "training", label: "Training plans", sub: true },
+  { id: "meals", label: "Meal plan & macros", sub: true },
   { id: "body", label: "Body", sub: true },
+  { id: "meds", label: "Meds tracker", sub: true },
+  { id: "mood", label: "Mental health", sub: true },
+  { id: "cycle", label: "Period tracker", sub: true },
   { id: "finances", label: "Finances", dom: "finances" },
   { id: "career", label: "Career", dom: "career" },
-  { id: "education", label: "Education", dom: "degree" },
-  { id: "travel", label: "Travel", dom: "travel" },
+  { id: "education", label: "Degree & Self Study", dom: "degree" },
+  { id: "travel", label: "Travel & Experiences", dom: "travel" },
+  { id: "bucket", label: "Bucket lists", sub: true },
+  { id: "places", label: "Past travels", sub: true },
   { id: "community", label: "Community", dom: "community" },
   { label: "" },
   { id: "settings", label: "Settings & backup", icon: "⚙" },
@@ -552,6 +604,96 @@ function renderNav(cur) {
 /* ============================== pages ============================== */
 const pages = {};
 
+/* ---------- contacts (used by the dashboard and the Contacts page) ---------- */
+const CONTACT_CATS = [["family", "Family"], ["close", "Close friends"], ["distant", "Distant friends"], ["work", "Work"], ["pets", "Pets"]];
+const contacts = () => { if (!state.contacts) state.contacts = P.contacts.map((c, i) => ({ id: "c" + i, ...c })); return state.contacts; };
+const ageOn = (bday, on) => { if (!bday || !/^\d{4}-/.test(bday) || bday.startsWith("0000")) return null; let a = Number(on.slice(0, 4)) - Number(bday.slice(0, 4)); if (on.slice(5) < bday.slice(5)) a--; return a; };
+function birthdaysBetween(a, b) {
+  const out = [];
+  (state.contacts || P.contacts).forEach((c) => { if (!c.birthday) return; const md = c.birthday.slice(5);
+    for (let y = Number(a.slice(0, 4)); y <= Number(b.slice(0, 4)); y++) { let d = `${y}-${md}`; if (md === "02-29" && new Date(y, 1, 29).getMonth() !== 1) d = `${y}-02-28`;
+      if (d >= a && d <= b) { const age = ageOn(c.birthday, d); out.push({ c, date: d, age }); } } });
+  return out;
+}
+
+/* ---------- "major" events for the dashboard month and week ---------- */
+const ROUTINE_TITLE = /wake up|morning routine|bedtime|lunch|commute|drive to|drive home|\bwork\b|workout|study|german|dinner|go to bed/i;
+const ROUTINE_CAL = /workout|\bwork\b|study|school|libs|math|biol|chem|class|meal|moon|task|routine|habit|rhythm|sleep|commute|drive/i;
+function majorEvents(a, b) {
+  const ev = [];
+  const inR = (d, end) => d <= b && (end || d) >= a;
+  sabbatsBetween(a, b).forEach((sb) => ev.push({ id: "wheel:" + sb.date, date: sb.date, title: sb.name, color: "var(--copper)", sub: sb.desc, icon: "✶" }));
+  birthdaysBetween(a, b).forEach(({ c, date, age }) => ev.push({ id: `bday:${c.id || c.name}:${date}`, date, title: `${c.name}'s birthday${age != null ? ` (${age})` : ""}`, color: "var(--d-family)", icon: "🎂", link: "#contacts" }));
+  (window.CALENDAR_DATES || []).forEach((k, ki) => {
+    const base = { title: k.title, color: "var(--cal-key)", sub: k.note || "", time: k.time || null };
+    if (k.repeat === "monthly" || k.repeat === "quarterly") {
+      const from = k.from || "2026-01-01"; let d = from.slice(0, 8) + pad(k.day || 1); if (d < from) d = addMonths(d, 1);
+      const step = k.repeat === "quarterly" ? 3 : 1; if (step === 3) while (parseD(d).getMonth() % 3 !== 0) d = addMonths(d, 1);
+      for (let n = 0; d <= b && n < 400; n++, d = addMonths(d, step)) if (d >= a) ev.push({ ...base, id: `key:${ki}:${d}`, date: d });
+    } else if (k.repeat === "yearly") { for (let d = k.date, n = 0; d <= b && n < 60; n++, d = addMonths(d, 12)) if (d >= a) ev.push({ ...base, id: `key:${ki}:${d}`, date: d }); }
+    else if (inR(k.date, k.end)) ev.push({ ...base, id: `key:${ki}`, date: k.date, end: k.end || null });
+  });
+  const r = rule222Dates();
+  [["dn", r.dn, "Date night"], ["wk", r.wk, "Weekend away (by)"], ["vac", r.vac, "Week away (by)"]].forEach(([k, list, title]) => list.forEach((d) => inR(d) && ev.push({ id: `r222:${k}:${d}`, date: d, title, color: "var(--d-family)", done: !!state.rule222.done[`${k}:${d}`], link: "#family" })));
+  (state.calendar || []).forEach((e) => {
+    const steps = { weekly: (d) => addDays(d, 7), biweekly: (d) => addDays(d, 14), monthly: (d, n) => addMonths(e.date, n), yearly: (d, n) => addMonths(e.date, 12 * n) };
+    const occ = e.repeat && steps[e.repeat] ? expandRepeat(e, a, b, steps[e.repeat]) : (inR(e.date, e.end) ? [{ date: e.date, end: e.end || null }] : []);
+    occ.forEach((o) => ev.push({ id: `u:${e.id}@${o.date}`, date: o.date, end: o.end, title: e.title, color: "#7A1C1C", time: e.allDay ? null : e.start || null, sub: e.notes || "" }));
+  });
+  if (gcal.connected) Object.values(gcal.events).forEach((g) => {
+    if (ROUTINE_CAL.test(g.cal) || ROUTINE_TITLE.test(g.title || "")) return; const col = gColor(g.cal, (gcal.calendars.find((c) => c.name === g.cal) || {}).index || 0);
+    const base = { id: "g:" + g.id, title: g.title, color: col.c, sub: [g.cal, g.location].filter(Boolean).join(" · ") };
+    if (g.allDay) { const end = g.days > 1 ? addDays(g.start, g.days - 1) : null; if (inR(g.start, end)) ev.push({ ...base, date: g.start, end }); return; }
+    const sd = iso(new Date(g.start)); if (inR(sd)) ev.push({ ...base, date: sd, time: hm(g.start) });
+  });
+  ev.forEach((e) => { if (e.end && e.end <= e.date) e.end = null; });
+  return ev;
+}
+function majorByDay(a, b) {
+  const map = {}; majorEvents(a, b).forEach((e) => { for (let d = e.date < a ? a : e.date, n = 0; d <= (e.end || e.date) && d <= b && n < 60; d = addDays(d, 1), n++) (map[d] = map[d] || []).push(e); });
+  Object.values(map).forEach((arr) => arr.sort((x, y) => (x.time ? 1 : 0) - (y.time ? 1 : 0) || (toMin(x.time) || 0) - (toMin(y.time) || 0) || x.title.localeCompare(y.title)));
+  return map;
+}
+const sundayOf = (s) => addDays(s, -parseD(s).getDay());
+const evTip = (e) => esc(`<b>${esc(e.title)}</b>${e.time ? "<br>" + e.time : ""}${e.sub ? "<br>" + esc(e.sub) : ""}`);
+function untilTxt(from, to) {
+  const n = daysBetween(from, to);
+  if (n <= 365) return { big: plural(n, "day"), small: "" };
+  let y = 0, m = 0; while (addMonths(from, (y + 1) * 12) <= to) y++; while (addMonths(from, y * 12 + m + 1) <= to) m++;
+  return { big: `${plural(y, "year")}${m ? ", " + plural(m, "month") : ""}`, small: `(${n.toLocaleString()} days)` };
+}
+let dashMonth = 0;
+function dashMonthBox(t) {
+  const first = addMonths(t.slice(0, 8) + "01", dashMonth); const ym = first.slice(0, 7);
+  const start = sundayOf(first); const lastDay = addDays(addMonths(first, 1), -1); const end = addDays(sundayOf(lastDay), 6);
+  gcalEnsure(start, end);
+  const map = majorByDay(start, end);
+  const moons = {}; moonEvents(start, end, true).forEach((m) => { moons[m.date] = m; });
+  const days = []; for (let d = start; d <= end; d = addDays(d, 1)) days.push(d);
+  return `<div class="box dash-cal">
+    <div class="dc-head"><h3>${fmt(first, { month: "long", year: "numeric" })}</h3><span class="row" style="gap:4px">${dashMonth ? `<button class="btn sm" data-act="dash-month" data-n="0">This month</button>` : ""}<button class="x-btn" data-act="dash-month" data-n="-1" aria-label="Previous month">‹</button><button class="x-btn" data-act="dash-month" data-n="1" aria-label="Next month">›</button></span></div>
+    <div class="dm-grid">${DOW.map((x) => `<div class="dm-h">${x}</div>`).join("")}
+    ${days.map((d) => { const evs = map[d] || []; const mo = moons[d];
+      return `<div class="dm-day ${d.slice(0, 7) !== ym ? "out" : ""} ${d === t ? "today" : ""}">
+        <button class="dm-num" data-act="dash-day" data-date="${d}" title="Open ${fmtLong(d)} in the calendar">${parseD(d).getDate()}</button>
+        ${mo ? `<div class="dm-moon" data-tip="${esc(`${mo.name} · ${mo.time}`)}">${mo.icon} <span>${mo.name}</span></div>` : ""}
+        ${evs.slice(0, 3).map((e) => `<div class="dm-ev ${e.done ? "done" : ""}" style="--ec:${e.color}" data-tip="${evTip(e)}">${e.icon ? e.icon + " " : ""}${esc(e.title)}</div>`).join("")}
+        ${evs.length > 3 ? `<button class="dm-more" data-act="dash-day" data-date="${d}">+${evs.length - 3} more</button>` : ""}
+      </div>`; }).join("")}</div></div>`;
+}
+function dashWeekBox(t) {
+  const start = sundayOf(t); const end = addDays(start, 6);
+  gcalEnsure(start, end);
+  const map = majorByDay(start, end); const moons = {}; moonEvents(start, end, true).forEach((m) => { moons[m.date] = m; });
+  const days = []; for (let d = start; d <= end; d = addDays(d, 1)) days.push(d);
+  return `<div class="box dash-week"><div class="dc-head"><h3>This week</h3><span class="sub" style="margin:0">${fmtShort(start)} – ${fmtShort(end)}</span></div>
+    ${days.map((d) => { const evs = map[d] || []; const mo = moons[d];
+      return `<div class="dw-day ${d === t ? "today" : ""} ${d < t ? "past" : ""}"><button class="dw-date" data-act="dash-day" data-date="${d}"><b>${dowOf(d)}</b> ${parseD(d).getDate()}</button>
+        <div class="dw-list">${mo ? `<div class="dw-ev moon">${mo.icon} ${mo.name} <span class="muted">${mo.time}</span></div>` : ""}
+        ${evs.map((e) => `<div class="dw-ev ${e.done ? "done" : ""}" data-tip="${evTip(e)}"><span class="dot" style="background:${e.color};width:8px;height:8px"></span>${e.time ? `<span class="muted">${e.time}</span> ` : ""}${esc(e.title)}</div>`).join("")}
+        ${!evs.length && !mo ? `<div class="dw-ev muted">–</div>` : ""}</div></div>`; }).join("")}</div>`;
+}
+
 pages.dashboard = () => {
   const t = today();
   const all = progressOf(TASKS);
@@ -561,8 +703,8 @@ pages.dashboard = () => {
   const fin = finance();
   const score = checkinScore(t);
   const s = activeSession(t);
-  const hr = new Date().getHours();
-  const greet = hr < 12 ? "Good morning" : hr < 18 ? "Good afternoon" : "Good evening";
+  const sb = sabbatOn(t);
+  const bdays = birthdaysBetween(t, t);
   const upcoming = countable(TASKS).filter((x) => status(x) !== "done" && x.d && x.d >= t && x.d <= addDays(t, 21)).sort((a, b) => a.d.localeCompare(b.d));
   const overdue = countable(TASKS).filter((x) => status(x) !== "done" && x.d && x.d < t).sort((a, b) => a.d.localeCompare(b.d));
   const countdowns = [
@@ -575,15 +717,23 @@ pages.dashboard = () => {
 
   return `
   <header class="page-head">
-  <h1>${greet}, <em>${esc(P.owner)}</em></h1>
-  <p class="subtitle">${sabbatOn(t) ? `<span class="blessed">Blessed ${sabbatOn(t).name}</span> · ` : ""}${fmtLong(t)} · Horizon 1: Active-Duty AF Career</p></header>
+  <h1>Hello, <em>${esc(me.user || P.owner)}</em>!</h1>
+  <p class="subtitle">Happy ${sb ? `<span class="blessed">${sb.name}</span>` : DOW_LONG[parseD(t).getDay()]}!${bdays.length ? ` It's ${bdays.map((x) => esc(x.c.name)).join(" and ")}'s birthday.` : ""}</p></header>
 
-  <div class="grid g4">
+  ${wheelSection(t)}
+
+  <div class="grid dash-split">
+    ${dashMonthBox(t)}
+    ${dashWeekBox(t)}
+  </div>
+
+  <div class="grid g4" style="margin-top:14px">
     <div class="box hero span2">
       ${ring(all.p, "var(--brass)", 112)}
       <div style="flex:1;min-width:0">
-        <div class="label">Horizon 1 plan complete</div>
+        <div class="label">Horizon 1: Active-Duty AF Career</div>
         <div class="big">${all.done}<span class="of"> / ${all.total} tasks</span></div>
+        <div class="sub">${pctTxt(all.p)} complete</div>
         <div style="margin-top:12px" class="label">Time used so far (since Dec 2011)</div>
         ${bar(timeP, "var(--muted)", "", null)}
         <div class="sub">${pctTxt(timeP)} of the 20 years · ${plural(daysLeft, "day")} to retirement</div>
@@ -603,23 +753,8 @@ pages.dashboard = () => {
   </div>
 
   <h2>Countdowns</h2>
-  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">
-    ${countdowns.map(([n, d, sub]) => `<div class="box tight"><div class="label">${n}</div><div class="big md">${plural(daysBetween(t, d), "day")}</div><div class="sub">${fmt(d)}${sub ? " · " + sub : ""}</div></div>`).join("")}
-  </div>
-
-  ${wheelSection(t)}
-
-  <h2>Life domains</h2>
-  <div class="grid cards">
-    ${P.domains.map((d) => {
-      const list = domainTasks(d.id); const pr = progressOf(list); const nx = nextTask(list);
-      const route = ROUTES.find((r) => r.dom === d.id).id;
-      return `<a class="box" href="#${route}">
-        <div class="card-head"><span class="dot" style="background:${d.color}"></span><h3>${d.name}</h3><span class="pct">${pr.total ? pctTxt(pr.p) : "–"}</span></div>
-        ${bar(pr.p, d.color)}
-        <div class="card-meta">${pr.total ? `${pr.done} of ${pr.total} tasks done` : "On hold until Horizon 2"}${nx ? `<br>Next: <b>${esc(nx.t)}</b> <span class="muted">(${esc(nx.due)})</span>` : ""}</div>
-      </a>`;
-    }).join("")}
+  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(190px,1fr))">
+    ${countdowns.map(([n, d, sub]) => { const u = untilTxt(t, d); return `<div class="box tight"><div class="label">${n}</div><div class="big md">${u.big}${u.small ? ` <span class="cd-days">${u.small}</span>` : ""}</div><div class="sub">${fmt(d)}${sub ? " · " + sub : ""}</div></div>`; }).join("")}
   </div>
 
   <div class="grid g2" style="margin-top:6px">
@@ -649,12 +784,33 @@ let ciDate = null;
 pages.today = () => {
   const t = today();
   const d = ciDate || t;
+  garminEnsure(addDays(d, -1), addDays(d, 1));
   const s = activeSession(d);
   const next = P.programs.find((p) => p.start > d);
   const ci = state.checkins[d] || {};
   const score = checkinScore(d);
   const last14 = (fn) => Array.from({ length: 14 }, (_, i) => addDays(t, i - 13)).map((x) => `<span class="${fn(x) ? "on" : ""}" title="${fmtShort(x)}"></span>`).join("");
   const sessionDone = (x) => { const ss = activeSession(x); return ss && ss.text && state.sessions[ss.key]; };
+  const row = (h) => {
+    if (!habitApplies(h, d)) return "";
+    const gv = h.garmin ? h.garmin(d) : null; const tv = ci[h.id + "T"] || gv || "";
+    return `<div class="checkin-row">
+      ${chk(habitDone(d, h.id), "habit", `data-h="${h.id}" data-date="${d}"`, "big-chk")}
+      <div class="ci-text"><b>${h.label}</b>${h.link ? ` <a class="h-link" href="${h.link[0]}">${h.link[1]} →</a>` : ""}<div class="sub">${esc(h.sub(d))}</div>
+        ${h.time ? `<label class="ci-time">${h.timeLabel || "Time"} <input type="time" value="${esc(tv)}" data-act="ci-time" data-h="${h.id}" data-date="${d}">${gv && !ci[h.id + "T"] ? `<span class="chip">⌚ Garmin</span>` : ""}</label>` : ""}</div>
+      <div style="text-align:right"><div class="days14">${last14((x) => habitDone(x, h.id))}</div><div class="streak">${plural(streak(h.id), "day")} streak</div></div>
+    </div>`;
+  };
+  const group = (g) => HABITS.filter((h) => h.group === g).map(row).join("");
+  const workoutRow = `<div class="checkin-row">
+      ${s && s.text ? chk(!!state.sessions[s.key], "session", `data-key="${s.key}"`, "big-chk") : `<span class="ongoing-dot" style="width:26px">–</span>`}
+      <div class="ci-text">
+        <b>Workout</b> ${s ? `<span class="chip">${esc(s.prog.name)} · week ${s.week}${s.module ? " · " + esc(s.module.name) : ""}</span>` : ""}
+        <div class="sub" style="font-size:14px;color:var(--text)">${s ? (s.text ? esc(s.text) : "Rest day") : next ? `No plan running. ${esc(next.name)} starts ${fmt(next.start)}.` : "No training plan running."}</div>
+        ${garminActsOn(d).map((x) => `<div class="sub">⌚ Garmin: ${esc(actLabel(x))}</div>`).join("")}
+      </div>
+      <div style="text-align:right"><div class="days14">${last14(sessionDone)}</div><div class="streak">${plural(workoutStreak(), "session")} in a row</div></div>
+    </div>`;
   return `
   <h1>Daily check-in</h1>
   <p class="subtitle">Tick what you did. Every tick feeds the dashboard and syncs to your other devices.</p>
@@ -666,30 +822,21 @@ pages.today = () => {
     <span class="chip ${score.done === score.total ? "good" : ""}" style="margin-left:auto">${score.done} / ${score.total} done</span>
   </div>
 
-  <div class="box">
-    <div class="checkin-row">
-      ${s && s.text ? chk(!!state.sessions[s.key], "session", `data-key="${s.key}"`, "big-chk") : `<span class="ongoing-dot" style="width:26px">–</span>`}
-      <div class="ci-text">
-        <b>Workout</b> ${s ? `<span class="chip">${esc(s.prog.name)} · week ${s.week}${s.module ? " · " + esc(s.module.name) : ""}</span>` : ""}
-        <div class="sub" style="font-size:14px;color:var(--text)">${s ? (s.text ? esc(s.text) : "Rest day") : next ? `No plan running. ${esc(next.name)} starts ${fmt(next.start)}.` : "No training plan running."}</div>
-        ${garminActsOn(d).map((x) => `<div class="sub">⌚ Garmin: ${esc(actLabel(x))}</div>`).join("")}
-      </div>
-      <div style="text-align:right"><div class="days14">${last14(sessionDone)}</div><div class="streak">${plural(workoutStreak(), "session")} in a row</div></div>
-    </div>
-    ${HABITS.map((h) => `
-    <div class="checkin-row">
-      ${chk(!!ci[h.id], "habit", `data-h="${h.id}" data-date="${d}"`, "big-chk")}
-      <div class="ci-text"><b>${h.label}</b><div class="sub">${esc(h.sub(d))}</div></div>
-      <div style="text-align:right"><div class="days14">${last14((x) => habitDone(x, h.id))}</div><div class="streak">${plural(streak(h.id), "day")} streak</div></div>
-    </div>`).join("")}
+  <h2>☀ Morning routine</h2>
+  <div class="box">${group("morning")}</div>
+
+  <h2>Through the day</h2>
+  <div class="box">${group("midday")}
+    <div class="ci-menu"><div class="label" style="margin-bottom:6px">This week's menu · ${menuForDate(d)} · <a href="#meals">Meal plan →</a></div>${menuTable(menuForDate(d))}</div>
+  </div>
+
+  <h2>☾ Evening routine</h2>
+  <div class="box">${workoutRow}${group("evening")}
     <div class="checkin-row" style="align-items:flex-start">
       <span class="ongoing-dot" style="width:26px">✎</span>
       <div class="ci-text"><b>Notes</b><textarea data-act="ci-note" data-date="${d}" placeholder="How did today go? Energy, mood, wins, anything to remember.">${esc(ci.note || "")}</textarea></div>
     </div>
-  </div>
-
-  <h2>This week's menu <span class="h-note">${menuForDate(d)} · <a href="#meals">Meal plan →</a></span></h2>
-  ${menuTable(menuForDate(d))}`;
+  </div>`;
 };
 
 function menuTable(code) {
@@ -719,7 +866,7 @@ pages.family = () => {
   const quarter = (m) => { const [y, mo] = m.split("-").map(Number); return `Q${Math.ceil(mo / 3)} ${y}`; };
   return `
   <h1>Family & Found Family</h1>
-  <p class="subtitle">My wife, our dogs, Allie, and the people we've chosen to keep close.</p>
+  <p class="subtitle">My wife, our dogs, Allie, and the people we've chosen to keep close. <a href="#contacts">Contacts →</a></p>
   ${projectsFor("family")}
 
   <h2>2-2-2 rule <span class="h-note">Date night every 2 weeks · weekend away every 2 months · a week away every 2 years</span></h2>
@@ -790,6 +937,11 @@ pages.health = () => {
     <a class="box" href="#body"><div class="label">Latest measurements</div><div class="big md">${lastB && lastB.weight ? `${lastB.weight} ${state.body.unit === "imperial" ? "lb" : "kg"}` : "Not set yet"}</div><div class="sub">${lastB ? fmt(lastB.date) + (bmiOf(lastB) ? ` · BMI ${bmiOf(lastB).toFixed(1)}` : "") : "Add your starting measurements"}</div></a>
   </div>
 
+  <div class="grid g3" style="margin-top:14px">
+    <a class="box tight" href="#meds"><div class="label">Meds tracker</div><div class="big md">${(() => { const l = medsList(); const tk = medsTaken(t); return l.length ? `${l.filter((m) => tk[m.id]).length} / ${l.length}` : "Set up"; })()}</div><div class="sub">taken today</div></a>
+    <a class="box tight" href="#mood"><div class="label">Mental health</div><div class="big md">${(PRIV().mood[t] || {}).mood ? `Mood ${(PRIV().mood[t] || {}).mood}/5` : "Not logged"}</div><div class="sub">today's check-in</div></a>
+    <a class="box tight" href="#cycle"><div class="label">Period tracker</div><div class="big md">${(() => { const ci = cycleInfo(); return ci.day ? `Day ${ci.day}` : "Set up"; })()}</div><div class="sub">${(() => { const ci = cycleInfo(); return ci.next ? `next about ${fmtShort(ci.next)}` : "log a period to start"; })()}</div></a>
+  </div>
   ${garminSection(t)}
   <h2>Endurance roadmap <span class="h-note">Each event builds the base for the next</span></h2>
   <div class="box"><ul class="timeline" style="--mc:${c}">
@@ -1114,7 +1266,7 @@ pages.education = () => {
   const real = blocks.filter((b) => !b.half);
   const doneN = real.filter((b) => state.studyDone[b.i]).length;
   return `
-  <h1>Degree & Education</h1>
+  <h1>Degree & Self Study</h1>
   <p class="subtitle">Finishing the biotech degree, then staying someone who keeps learning.</p>
   ${projectsFor("degree")}
 
@@ -1157,15 +1309,12 @@ pages.travel = () => {
   <div class="grid g3">
     <div class="box"><div class="label">Time left in Germany</div><div class="big md">${monthsLeft} months</div><div class="sub">DEROS ${fmt(P.keyDates.deros)} · about ${Math.floor(monthsLeft / 3)} quarters = ${Math.floor(monthsLeft / 3)} trips at one a quarter</div></div>
     <div class="box"><div class="label">Countries visited from Wiesbaden</div><div class="big md">${countries.length}</div><div class="sub">Since arriving ${fmt(P.keyDates.arrived)}</div></div>
-    <div class="box"><div class="label">Bucket list</div><div class="big md">${bucket.filter((b) => b.done).length}<span class="of"> / ${bucket.length}</span></div><div class="sub">${bucket.length ? "done" : "Brainstorm the top 10 with your wife"}</div></div>
+    <a class="box" href="#bucket"><div class="label">Bucket lists</div><div class="big md">${bucket.filter((b) => b.done).length}<span class="of"> / ${bucket.length} in Europe</span></div><div class="sub">${(state.bucketAll || []).length} on the full list · open →</div></a>
   </div>
   <div class="grid g2">
-    <div><h2>Europe bucket list</h2><div class="box">
-      ${bucket.length ? `<ul class="list-edit">${bucket.map((b, i) => `<li>${chk(b.done, "bucket-tick", `data-i="${i}"`)}<span class="grow ${b.done ? "muted" : ""}" style="${b.done ? "text-decoration:line-through" : ""}">${i + 1}. ${esc(b.t)}</span><button class="x-btn" data-act="bucket-del" data-i="${i}">×</button></li>`).join("")}</ul>` : `<div class="empty">Nothing yet.</div>`}
-      <input type="text" placeholder="+ Add a place or experience and press Enter" data-act="bucket-add" style="margin-top:10px">
-    </div></div>
-    <div><h2>Country tracker</h2><div class="box">
-      ${countries.length ? `<ul class="list-edit">${countries.map((x, i) => `<li><span class="dot" style="background:${c}"></span><span class="grow">${esc(x.name)}</span><span class="sub" style="margin:0">${x.date ? fmt(x.date) : ""}</span><button class="x-btn" data-act="country-del" data-i="${i}">×</button></li>`).join("")}</ul>` : `<div class="empty">No trips logged yet. Poland and Czechia are on the list.</div>`}
+    <a class="box" href="#places"><h3>Past travels</h3><div class="sub">${allTravels().length} places in ${new Set(allTravels().map((x) => x.country).filter(Boolean)).size} countries, by year, with the map →</div></a>
+    <div><div class="box"><h3>Country tracker <span class="muted" style="font-weight:400">since Wiesbaden</span></h3>
+      ${countries.length ? `<ul class="list-edit">${countries.map((x, i) => `<li><span class="dot" style="background:${c}"></span><span class="grow">${esc(x.name)}</span><span class="sub" style="margin:0">${x.date ? fmt(x.date) : ""}</span><button class="x-btn" data-act="country-del" data-i="${i}">×</button></li>`).join("")}</ul>` : `<div class="empty">No countries logged yet.</div>`}
       <form data-form="country" class="row" style="margin-top:10px"><input type="text" name="name" placeholder="Country" required style="flex:2"><input type="date" name="date" style="flex:1"><button class="btn" type="submit">Add</button></form>
     </div></div>
   </div>
@@ -1515,17 +1664,21 @@ function calModal() {
 
 function wheelSection(t) {
   const m = moonNow(); const sb = sabbatOn(t); const nx = nextSabbat(t); const last = lastSabbat(t);
-  const season = seasonOf(menuForDate(t))[0];
+  const code = menuForDate(t); const season = seasonOf(code)[0]; const menu = P.menus[code] || [];
+  const nextPh = moonEvents(t, addDays(t, 10), true).find((e) => e.date > t || (e.date === t && e.time > `${pad(new Date().getHours())}:${pad(new Date().getMinutes())}`));
+  const dish = (k) => (menu.find((r) => r[0] === k) || [])[1];
   return `<h2>The moon &amp; the wheel</h2>
   <div class="grid g3">
     <div class="box wheel-card"><div class="row" style="flex-wrap:nowrap;gap:16px">${moonSVG(m.age, 64)}
-      <div><div class="label">Tonight's moon</div><div class="big md">${m.name}</div><div class="sub">${Math.round(m.illum * 100)}% lit${m.nextFull ? ` · full moon ${relDays(m.nextFull.date) === "today" ? "today" : fmtShort(m.nextFull.date)}` : ""}${m.nextNew ? ` · new ${fmtShort(m.nextNew.date)}` : ""}</div></div></div></div>
+      <div><div class="label">Tonight's moon</div><div class="big md">${m.name}</div><div class="sub">${Math.round(m.illum * 100)}% lit · ${m.age < 0.5 ? "waxing" : "waning"}</div>
+      ${nextPh ? `<div class="sub">${nextPh.name === m.name ? `Exactly ${nextPh.name.toLowerCase()} at ${nextPh.time}${nextPh.date === t ? " today" : ""}` : `Next: ${nextPh.icon} ${nextPh.name}, ${nextPh.date === t ? "today" : fmt(nextPh.date, { weekday: "short", day: "numeric", month: "short" })} ${nextPh.time}`}</div>` : ""}</div></div></div>
     <div class="box wheel-card ${sb ? "is-sabbat" : ""}"><div class="label">${sb ? "Today on the wheel" : "Next on the wheel"}</div>
       <div class="big md">${sb ? sb.name : nx.name}</div>
       <div class="sub">${sb ? esc(sb.desc) : `${fmt(nx.date, { day: "numeric", month: "long" })} · ${relDays(nx.date)}`}</div>
       ${sb ? `<div class="sub" style="margin-top:6px">Next: ${nx.name}, ${fmt(nx.date, { day: "numeric", month: "long" })}</div>` : `<div class="sub" style="margin-top:6px">${esc(nx.desc)}</div>`}</div>
-    <a class="box wheel-card" href="#meals"><div class="label">The season's table</div><div class="big md">${season}</div>
-      <div class="sub">Menu ${menuForDate(t)} this week${last ? ` · since ${last.name}` : ""}. Seasonal menus turn with the equinoxes and solstices.</div></a>
+    <a class="box wheel-card" href="#meals"><div class="label">This season's table</div><div class="big md">${season} · ${code}</div>
+      <div class="sub">${[["B", "Breakfast"], ["L", "Lunch"], ["D", "Dinner"]].filter(([k]) => dish(k)).map(([k, n]) => `${n}: ${esc(dish(k))}`).join("<br>")}</div>
+      <div class="sub" style="margin-top:4px">${menuTotals(code).kcal} kcal in meals${last ? ` · ${season} menus since ${last.name}` : ""}</div></a>
   </div>`;
 }
 pages.calendar = () => {
@@ -1606,7 +1759,13 @@ pages.calendar.after = () => {
 const MOODS = ["adventurous", "challenging", "dark", "emotional", "funny", "hopeful", "informative", "inspiring", "lighthearted", "mysterious", "reflective", "relaxing", "sad", "tense"];
 const PACES = ["slow", "medium", "fast"];
 const FORMATS = [["print", "Print"], ["digital", "Digital"], ["audio", "Audio"]];
-const STATUSES = [["reading", "Currently reading"], ["to-read", "To-read"], ["read", "Read"], ["dnf", "Did not finish"], ["", "Not on a list"]];
+const STATUSES = [["reading", "Currently reading"], ["to-read", "To-read"], ["read", "Read"], ["wishlist", "Wishlist (to buy)"], ["dnf", "Did not finish"], ["", "Not on a list"]];
+// the to-read pile: anything marked to-read, plus books on my own shelves I haven't read yet
+const inTBR = (b) => b.status === "to-read" || (b.owned && !b.status);
+const tbrList = () => allBooks().filter(inTBR).sort((a, b) => (a.status === "to-read" ? 0 : 1) - (b.status === "to-read" ? 0 : 1) || (b.added || "").localeCompare(a.added || "") || normT(a.title).localeCompare(normT(b.title)));
+const readList = () => allBooks().filter((b) => b.status === "read").sort((a, b) => (b.finished || "0").localeCompare(a.finished || "0") || normT(a.title).localeCompare(normT(b.title)));
+const hoursIn = (y) => Math.round(sum(allBooks().flatMap((b) => (b.sessions || []).filter((x) => (x.date || "").startsWith(String(y))).map((x) => x.minutes || 0))) / 60 * 10) / 10;
+const CH_KINDS = [["books", "Read a number of books"], ["pages", "Read a number of pages"], ["hours", "Read a number of hours"], ["shelf", "Read books from my own shelves"], ["genre", "Read books in a genre"], ["nonfiction", "Read nonfiction books"], ["fiction", "Read fiction books"]];
 const GENRE_MAP = [["Fantasy", /fantasy|magic|dragons|wizards/], ["Science Fiction", /science fiction|dystopi|space opera|robots|time travel|extraterrestrial/], ["Romance", /romance|love stories/], ["Horror", /horror|ghost|haunted|zombie|vampire/], ["Thriller", /thriller|suspense/], ["Mystery", /mystery|detective|crime/], ["Historical", /historical fiction/], ["Young Adult", /young adult|juvenile fiction|teen/], ["LGBTQIA+", /lgbt|gay|lesbian|queer|transgender|bisexual/], ["Comics", /comic|graphic novel|manga/], ["Classics", /classic/], ["Literary", /literary fiction|psychological fiction/], ["Contemporary", /contemporary|domestic fiction/], ["Memoir", /memoir|autobiograph/], ["Biography", /biograph/], ["History", /(^|, )history|world history|military history|united states -- history/], ["Science", /biology|evolution|physics|neuroscience|brain|extinction|scientific/], ["Psychology", /psycholog/], ["Self Help", /self-help|self help|habits|success|conduct of life/], ["Politics", /politic|government|geopolitic/], ["Philosophy", /philosoph/], ["Sociology", /sociolog|social conditions|social history/], ["Race", /race relations|racism/], ["Gender", /feminism|women's rights|gender/], ["Essays", /essays/], ["Nature", /nature|ocean|animals|ecology/], ["Poetry", /poetry/], ["Humor", /humor|humour/]];
 const readUI = { edit: null, search: { q: "", results: [], loading: false, err: "" }, statYear: null, statMonth: "", bulk: null, importMsg: "", lookup: {} };
 const normT = (t) => String(t || "").toLowerCase().replace(/^(the|a|an) /, "").replace(/[^a-z0-9]/g, "");
@@ -1660,7 +1819,7 @@ async function lookupBook(id, quiet) {
   try {
     const docs = await olSearch(`${b.title} ${b.author || ""}`.replace(/[&?]/g, " "));
     const d = docs.find((x) => normT(x.title) === normT(b.title)) || docs[0];
-    if (!d) { readUI.lookup[id] = "none"; if (!quiet) render(); return false; }
+    if (!d) { readUI.lookup[id] = "none"; patchBook(id, { olTried: true }); if (!quiet) commit(); return false; }
     const o = olToBook(d); const p = {};
     if (!b.cover && o.cover) p.cover = o.cover;
     if (!b.pages && o.pages) p.pages = o.pages;
@@ -1673,7 +1832,8 @@ async function lookupBook(id, quiet) {
   } catch (e) { readUI.lookup[id] = "error"; if (!quiet) render(); return false; }
 }
 async function bulkLookup() {
-  const todo = allBooks().filter((b) => !b.olKey && (!b.cover || !b.pages));
+  const todo = allBooks().filter((b) => !b.olKey && !b.olTried && (!b.cover || !b.pages));
+  if (!todo.length || readUI.bulk) return;
   readUI.bulk = { done: 0, total: todo.length, found: 0 }; render();
   for (const b of todo) {
     if (!readUI.bulk) break;
@@ -1749,8 +1909,15 @@ function cols12(vals, color, unit) {
   const max = Math.max(1, ...vals); const M = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
   return `<div class="cols12">${vals.map((v, i) => `<div class="c12" data-tip="${esc(`${fmt(`2026-${pad(i + 1)}-01`, { month: "long" })}: <b>${v.toLocaleString()}</b> ${unit}`)}"><span class="c12v">${v || ""}</span><span class="c12b" style="height:${(v / max) * 100}%;background:${color}"></span><span class="c12l">${M[i]}</span></div>`).join("")}</div>`;
 }
-const RTABS = [["", "Home"], ["stats", "Stats"], ["library", "Library"], ["add", "Add a book"], ["import", "Import & export"]];
-function readTabs(cur) { return `<div class="seg rtabs">${RTABS.map(([k, l]) => `<a href="#reading${k ? "/" + k : ""}" class="${cur === k ? "on" : ""}">${l}</a>`).join("")}</div>`; }
+const RTABS = [["", "Home"], ["stats", "Stats"], ["challenges", "Challenges"], ["tbr", "To-read pile"], ["wishlist", "Wishlist"], ["read", "Books I've read"]];
+const RTABS2 = [["library", "Search my library"], ["add", "Add a book"], ["import", "Import & export"]];
+function readTabs(cur) {
+  const b = readUI.bulk;
+  return `<div class="seg rtabs">${RTABS.map(([k, l]) => `<a href="#reading${k ? "/" + k : ""}" class="${cur === k ? "on" : ""}">${l}</a>`).join("")}</div>
+  <div class="rtabs2">${RTABS2.map(([k, l]) => `<a href="#reading/${k}" class="${cur === k ? "on" : ""}">${l}</a>`).join(" · ")}${b ? ` <span class="muted">· fetching covers ${b.done}/${b.total}</span>` : ""}</div>`;
+}
+const bookRow = (b) => { const lbl = Object.fromEntries(STATUSES); return `<li class="rlib-row" data-s="${esc((b.title + " " + (b.author || "")).toLowerCase())}"><a href="#reading/b-${b.id}">${coverHTML(b, "xs")}<span class="rl-t"><b>${esc(b.title)}</b><span class="sub">${esc(b.author || "")}${b.finished && b.status === "read" ? ` · finished ${fmt(b.finished)}` : ""}${b.status === "reading" ? ` · ${pctTxt(pctOf(b))}` : ""}</span></span>
+    <span class="rl-m">${b.rating ? `<span class="chip">★ ${b.rating}</span>` : ""}${b.status ? `<span class="chip ${b.status === "read" ? "good" : b.status === "reading" ? "warn" : ""}">${lbl[b.status]}</span>` : ""}${b.owned ? `<span class="chip">Owned</span>` : ""}</span></a></li>`; };
 function progressForm(b) {
   return `<form data-form="rprogress" class="rprog-form"><input type="hidden" name="id" value="${b.id}">
     <div class="form-grid">
@@ -1760,35 +1927,94 @@ function progressForm(b) {
     </div><div class="row" style="margin-top:10px"><button class="btn primary sm" type="submit">Save progress</button><button class="btn sm" type="button" data-act="r-edit" data-id="">Cancel</button></div></form>`;
 }
 function readHome() {
-  const all = allBooks(); const t = today(); const y = Number(t.slice(0, 4));
+  const all = allBooks();
   const cur = all.filter((b) => b.status === "reading");
-  const tbr = all.filter((b) => b.status === "to-read").sort((a, b) => (b.added || "").localeCompare(a.added || ""));
-  const recent = all.filter((b) => b.status === "read").sort((a, b) => (b.finished || "0").localeCompare(a.finished || "0")).slice(0, 10);
-  const g = R().goals[y] || {}; const yr = all.filter((b) => b.status === "read" && (b.finished || "").startsWith(String(y)));
-  const pagesY = sum(yr.map((b) => b.pages || 0)); const minsY = sum(all.flatMap((b) => (b.sessions || []).filter((s) => (s.date || "").startsWith(String(y))).map((s) => s.minutes || 0)));
-  const frac = daysBetween(`${y}-01-01`, t) / (daysBetween(`${y}-01-01`, `${y}-12-31`) + 1);
-  const goalRow = (label, have, goal, unit) => goal ? `<div class="fund"><div class="frow"><span>${label}</span><span>${have.toLocaleString()} / ${goal.toLocaleString()} ${unit} · ${pctTxt(have / goal)}</span></div>${bar(have / goal, "var(--moss)", "thick", frac)}<div class="sub">${have >= goal * frac ? '<span class="good">On track</span>' : `${Math.ceil(goal * frac - have).toLocaleString()} ${unit} behind pace`} · the line marks where you'd be on an even pace</div></div>` : "";
+  const tbr = tbrList();
   return `${readTabs("")}
   <h2>Currently reading <span class="h-note">${cur.length}</span></h2>
   ${cur.length ? `<div class="grid g2">${cur.map((b) => `<div class="box rcur">
       <a href="#reading/b-${b.id}">${coverHTML(b, "md")}</a>
       <div class="rcur-body"><a class="rtitle" href="#reading/b-${b.id}">${esc(b.title)}</a><div class="sub">${esc(b.author || "")}</div>
-        <div style="margin:12px 0 4px">${bar(pctOf(b), "var(--moss)", "thick")}</div>
-        <div class="sub">${pctTxt(pctOf(b))}${b.pages ? ` · page ${b.progress || 0} of ${b.pages}` : ""}${b.started ? ` · started ${fmtShort(b.started)}` : ""}</div>
+        <div class="rpct">${pctTxt(pctOf(b))} <span>complete</span></div>
+        <div style="margin:6px 0 4px">${bar(pctOf(b), "var(--moss)", "thick")}</div>
+        <div class="sub">${b.pages ? `page ${b.progress || 0} of ${b.pages}` : ""}${b.started ? ` · started ${fmtShort(b.started)}` : ""}</div>
         ${readUI.edit === b.id ? progressForm(b) : `<div class="row" style="margin-top:12px"><button class="btn sm" data-act="r-edit" data-id="${b.id}">Update progress</button><button class="btn primary sm" data-act="r-finish" data-id="${b.id}">Finished</button></div>`}
       </div></div>`).join("")}</div>` : `<div class="box empty">Nothing on the go. Pick something from your to-read pile below.</div>`}
-  <h2>${y} reading goals <span class="h-note"><a href="#reading/stats">Stats →</a></span></h2>
+  <h2>Up next from the to-read pile <span class="h-note">${tbr.length} books · <a href="#reading/tbr">see the whole pile →</a></span></h2>
+  ${tbr.length ? `<div class="tbr5">${tbr.slice(0, 5).map((b) => `<div class="tbr5-item"><a href="#reading/b-${b.id}">${coverHTML(b)}</a><a class="t" href="#reading/b-${b.id}">${esc(b.title)}</a><span class="sub">${esc(b.author || "")}</span><button class="btn sm" data-act="r-start" data-id="${b.id}">Start reading</button></div>`).join("")}</div>` : `<div class="box empty">Your to-read pile is empty.</div>`}`;
+}
+function readTBR() {
+  const list = tbrList();
+  return `${readTabs("tbr")}
+  <h2>To-read pile <span class="h-note">${list.length} books · everything marked to-read, plus the unread books on your shelves</span></h2>
+  <div class="row" style="margin-bottom:10px"><input type="search" placeholder="Search the pile…" data-act="r-libq" style="flex:1;min-width:200px"></div>
+  <div class="box"><ul class="rlib">${list.map(bookRow).join("") || `<li class="empty">Nothing here.</li>`}</ul></div>`;
+}
+function readWish() {
+  const list = allBooks().filter((b) => b.status === "wishlist").sort((a, b) => (b.added || "").localeCompare(a.added || ""));
+  return `${readTabs("wishlist")}
+  <h2>Wishlist <span class="h-note">books to buy · ${list.length}</span></h2>
+  <div class="box"><form data-form="rwish" class="row"><input type="text" name="title" placeholder="Title" required style="flex:2;min-width:160px"><input type="text" name="author" placeholder="Author" style="flex:1;min-width:120px"><button class="btn primary" type="submit">Add to wishlist</button></form>
+    <div class="sub" style="margin-top:6px">The cover and page count are looked up for you. You can also use <a href="#reading/add">Add a book</a> and choose “Wishlist”.</div></div>
+  <div class="box" style="margin-top:12px"><ul class="rlib">${list.map((b) => `<li class="rlib-row"><div class="rl-a"><a href="#reading/b-${b.id}" class="rl-a" style="flex:1">${coverHTML(b, "xs")}<span class="rl-t"><b>${esc(b.title)}</b><span class="sub">${esc(b.author || "")}${b.added ? ` · added ${fmt(b.added)}` : ""}</span></span></a>
+    <span class="rl-m"><button class="btn sm primary" data-act="r-bought" data-id="${b.id}">Bought it</button><button class="x-btn" data-act="r-del" data-id="${b.id}" title="Remove">×</button></span></div></li>`).join("") || `<li class="empty">Nothing on the wishlist yet.</li>`}</ul></div>`;
+}
+function readRead() {
+  const list = readList(); const by = {};
+  list.forEach((b) => { const y = (b.finished || "").slice(0, 4) || "No date"; (by[y] = by[y] || []).push(b); });
+  return `${readTabs("read")}
+  <h2>Books I've read <span class="h-note">${list.length} in all</span></h2>
+  <div class="row" style="margin-bottom:10px"><input type="search" placeholder="Search books I've read…" data-act="r-libq" style="flex:1;min-width:200px"></div>
+  ${Object.keys(by).sort((a, b) => (a === "No date") - (b === "No date") || b.localeCompare(a)).map((y) => `<h3 class="ryear">${y} <span class="muted">· ${by[y].length}</span></h3><div class="box"><ul class="rlib">${by[y].map(bookRow).join("")}</ul></div>`).join("") || `<div class="box empty">Nothing marked read yet.</div>`}`;
+}
+function chProgress(c) {
+  const y = String(c.year); const yr = readList().filter((b) => (b.finished || "").startsWith(y));
+  const have = c.kind === "pages" ? sum(yr.map((b) => b.pages || 0)) : c.kind === "hours" ? hoursIn(y) : c.kind === "shelf" ? yr.filter((b) => b.owned).length
+    : c.kind === "genre" ? yr.filter((b) => (b.genres || []).some((g) => g.toLowerCase() === String(c.genre || "").toLowerCase())).length
+    : c.kind === "nonfiction" ? yr.filter((b) => b.fiction === false).length : c.kind === "fiction" ? yr.filter((b) => b.fiction === true).length : yr.length;
+  return { have, unit: c.kind === "pages" ? "pages" : c.kind === "hours" ? "hours" : "books" };
+}
+function goalBar(label, have, goal, unit, y) {
+  const t = today(); const cy = String(y) === t.slice(0, 4);
+  const frac = cy ? daysBetween(`${y}-01-01`, t) / (daysBetween(`${y}-01-01`, `${y}-12-31`) + 1) : 1;
+  const done = have >= goal;
+  return `<div class="fund"><div class="frow"><span>${esc(label)}</span><span>${have.toLocaleString()} / ${goal.toLocaleString()} ${unit} · ${pctTxt(have / goal)}</span></div>${bar(have / goal, "var(--moss)", "thick", cy ? frac : null)}
+    <div class="sub">${done ? '<span class="good">Done ✓</span>' : cy ? (have >= goal * frac ? '<span class="good">On track</span>' : `${Math.ceil(goal * frac - have).toLocaleString()} ${unit} behind pace`) : '<span class="muted">Not reached</span>'}</div></div>`;
+}
+function readChallenges() {
+  const r = R(); const t = today(); const y = Number(t.slice(0, 4));
+  const g = r.goals[y] || {}; const yr = readList().filter((b) => (b.finished || "").startsWith(String(y)));
+  const pagesY = sum(yr.map((b) => b.pages || 0)); const hrsY = hoursIn(y);
+  const chs = (r.challenges || []);
+  const cur = chs.filter((c) => Number(c.year) === y); const past = chs.filter((c) => Number(c.year) < y);
+  const pastYears = [...new Set([...Object.keys(r.goals).map(Number), ...past.map((c) => Number(c.year))])].filter((x) => x < y).sort((a, b) => b - a);
+  const chBox = (c) => { const p = chProgress(c); return `<div class="box"><div class="row" style="justify-content:space-between;flex-wrap:nowrap"><h3 style="margin:0">${esc(c.name)}</h3><button class="x-btn" data-act="r-chdel" data-id="${c.id}" title="Delete challenge">×</button></div>
+    <div class="sub" style="margin-bottom:8px">${esc((CH_KINDS.find((k) => k[0] === c.kind) || [])[1] || "")}${c.kind === "genre" ? `: ${esc(c.genre || "")}` : ""} · ${c.year}</div>${goalBar("Progress", p.have, Number(c.target) || 1, p.unit, c.year)}</div>`; };
+  return `${readTabs("challenges")}
+  <h2>${y} reading goals <span class="h-note">see your progress this year and set goals</span></h2>
   <div class="box">
-    <div class="row" style="gap:14px;margin-bottom:${g.books || g.pages || g.hours ? 6 : 0}px"><span class="big md" style="margin:0">${yr.length}</span><span class="sub" style="margin:0">books read in ${y}${pagesY ? ` · ${pagesY.toLocaleString()} pages` : ""}${minsY ? ` · ${(minsY / 60).toFixed(1)} hours logged` : ""}</span></div>
-    ${goalRow("Books", yr.length, g.books, "books")}${goalRow("Pages", pagesY, g.pages, "pages")}${goalRow("Hours", Math.round(minsY / 60), g.hours, "hours")}
+    <div class="row" style="gap:14px;margin-bottom:8px"><span class="big md" style="margin:0">${yr.length}</span><span class="sub" style="margin:0">books read in ${y} · ${pagesY.toLocaleString()} pages · ${hrsY} hours logged</span></div>
+    ${g.books ? goalBar("Books", yr.length, g.books, "books", y) : ""}${g.pages ? goalBar("Pages", pagesY, g.pages, "pages", y) : ""}${g.hours ? goalBar("Hours", hrsY, g.hours, "hours", y) : ""}
     <form data-form="rgoal" class="form-grid" style="margin-top:12px"><input type="hidden" name="year" value="${y}">
       <label>Books goal<input type="number" name="books" min="0" value="${g.books || ""}"></label><label>Pages goal<input type="number" name="pages" min="0" value="${g.pages || ""}"></label><label>Hours goal<input type="number" name="hours" min="0" value="${g.hours || ""}"></label>
       <label>&nbsp;<button class="btn sm" type="submit">Set goals</button></label></form>
+    <div class="sub" style="margin-top:6px">Hours come from the minutes you log with “Update progress”.</div>
   </div>
-  <h2>To-read pile <span class="h-note">${tbr.length} · <a href="#reading/library">see all →</a></span></h2>
-  ${tbr.length ? `<div class="shelf">${tbr.slice(0, 14).map((b) => `<a href="#reading/b-${b.id}" class="shelf-item" title="${esc(b.title)}">${coverHTML(b)}</a>`).join("")}</div>` : `<div class="box empty">Your to-read pile is empty.</div>`}
-  <h2>Recently read</h2>
-  ${recent.length ? `<div class="shelf">${recent.map((b) => `<a href="#reading/b-${b.id}" class="shelf-item" title="${esc(b.title)}">${coverHTML(b)}${b.rating ? `<span class="shelf-r">★ ${b.rating}</span>` : ""}</a>`).join("")}</div>` : `<div class="box empty">Nothing marked read yet.</div>`}`;
+  <h2>My ${y} challenges</h2>
+  ${cur.length ? `<div class="grid g2">${cur.map(chBox).join("")}</div>` : `<div class="box empty">No challenges yet this year. Add one below.</div>`}
+  <h2>Add a challenge</h2>
+  <div class="box"><form data-form="rchallenge" class="form-grid">
+    <label>Name<input type="text" name="name" placeholder="e.g. 12 books off my shelves" required></label>
+    <label>Type<select name="kind">${CH_KINDS.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select></label>
+    <label>Target<input type="number" name="target" min="1" required></label>
+    <label>Genre (for genre challenges)<input type="text" name="genre" placeholder="e.g. Fantasy"></label>
+    <label>Year<input type="number" name="year" value="${y}" min="2000" max="2100"></label>
+    <label>&nbsp;<button class="btn primary" type="submit">Add challenge</button></label></form></div>
+  <h2>Past years</h2>
+  ${pastYears.length ? pastYears.map((py) => { const pg = r.goals[py] || {}; const pyr = readList().filter((b) => (b.finished || "").startsWith(String(py)));
+    return `<div class="box" style="margin-bottom:12px"><h3>${py} <span class="muted" style="font-weight:400">· ${plural(pyr.length, "book")} read</span></h3>
+      ${pg.books ? goalBar("Books goal", pyr.length, pg.books, "books", py) : ""}${pg.pages ? goalBar("Pages goal", sum(pyr.map((b) => b.pages || 0)), pg.pages, "pages", py) : ""}${pg.hours ? goalBar("Hours goal", hoursIn(py), pg.hours, "hours", py) : ""}
+      ${past.filter((c) => Number(c.year) === py).map((c) => { const p = chProgress(c); return goalBar(c.name, p.have, Number(c.target) || 1, p.unit, py); }).join("")}</div>`; }).join("") : `<div class="box empty">Your challenges and goals from earlier years will be kept here.</div>`}`;
 }
 function readStats() {
   const all = allBooks(); const t = today();
@@ -1805,7 +2031,11 @@ function readStats() {
   const perMonth = Array.from({ length: 12 }, (_, i) => yearReads.filter((b) => b.finished.slice(5, 7) === pad(i + 1)));
   const rated = per.filter((b) => b.rating);
   const ratingRows = [5, 4, 3, 2, 1].map((s) => [`${s} ★`, rated.filter((b) => Math.min(5, Math.floor(b.rating)) === s).length]);
+  const ty = t.slice(0, 4), ly = String(Number(ty) - 1); const allRead = readList();
+  const tile = (label, list) => `<div class="box tight"><div class="label">${label}</div><div class="big md">${list.length} <span class="of">books</span></div><div class="sub">${sum(list.map((b) => b.pages || 0)).toLocaleString()} pages</div></div>`;
   return `${readTabs("stats")}
+  <div class="grid g3" style="margin-top:14px">${tile(`This year (${ty})`, allRead.filter((b) => (b.finished || "").startsWith(ty)))}${tile(`Last year (${ly})`, allRead.filter((b) => (b.finished || "").startsWith(ly)))}${tile("All time", allRead)}</div>
+  <div class="row" style="margin-top:10px"><a class="btn" href="#reading/read">View all books I've read →</a></div>
   <div class="box row" style="margin-top:14px"><span class="label">Viewing stats for read books in</span>
     <select data-act="r-year" style="width:auto">${years.map((x) => `<option ${x === y ? "selected" : ""}>${x}</option>`).join("")}</select>
     <select data-act="r-month" style="width:auto"><option value="">All year</option>${Array.from({ length: 12 }, (_, i) => `<option value="${pad(i + 1)}" ${m === pad(i + 1) ? "selected" : ""}>${fmt(`2026-${pad(i + 1)}-01`, { month: "long" })}</option>`).join("")}</select></div>
@@ -1841,7 +2071,7 @@ function readLibrary() {
   const lbl = Object.fromEntries(STATUSES);
   return `${readTabs("library")}
   <div class="row" style="margin:14px 0"><input type="search" placeholder="Search your books…" data-act="r-libq" style="flex:1;min-width:200px">
-    <select data-act="r-libf" style="width:auto">${[["all", `All (${all.length})`], ["reading", `Currently reading (${n("reading")})`], ["to-read", `To-read (${n("to-read")})`], ["read", `Read (${n("read")})`], ["dnf", `Did not finish (${n("dnf")})`], ["owned", `On my shelves (${n("owned")})`], ["none", `Not on a list (${n("none")})`]].map(([k, l]) => `<option value="${k}" ${f === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+    <select data-act="r-libf" style="width:auto">${[["all", `All (${all.length})`], ["reading", `Currently reading (${n("reading")})`], ["to-read", `To-read (${n("to-read")})`], ["read", `Read (${n("read")})`], ["wishlist", `Wishlist (${n("wishlist")})`], ["dnf", `Did not finish (${n("dnf")})`], ["owned", `On my shelves (${n("owned")})`], ["none", `Not on a list (${n("none")})`]].map(([k, l]) => `<option value="${k}" ${f === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
   <div class="box"><ul class="rlib">${list.map((b) => `<li class="rlib-row" data-s="${esc((b.title + " " + (b.author || "")).toLowerCase())}"><a href="#reading/b-${b.id}">${coverHTML(b, "xs")}<span class="rl-t"><b>${esc(b.title)}</b><span class="sub">${esc(b.author || "")}</span></span>
     <span class="rl-m">${b.rating ? `<span class="chip">★ ${b.rating}</span>` : ""}${b.status ? `<span class="chip ${b.status === "read" ? "good" : b.status === "reading" ? "warn" : ""}">${lbl[b.status]}</span>` : ""}${b.owned ? `<span class="chip">Owned</span>` : ""}</span></a></li>`).join("") || `<li class="empty">No books here.</li>`}</ul></div>`;
 }
@@ -1853,7 +2083,7 @@ function readAdd() {
     <div class="sub" style="margin-top:6px">Book details and covers come from Open Library.</div>
     ${s.err ? `<div class="note" style="margin-top:10px">${esc(s.err)}</div>` : ""}
     ${s.results.length ? `<ul class="rlib" style="margin-top:10px">${s.results.map((r, i) => `<li class="rlib-row"><div class="rl-a">${coverHTML(r, "xs")}<span class="rl-t"><b>${esc(r.title)}</b><span class="sub">${esc(r.author)}${r.year ? ` · ${r.year}` : ""}${r.pages ? ` · ${r.pages} pages` : ""}</span></span>
-      <span class="rl-m"><select data-act="noop" id="rs-st-${i}" style="width:auto">${STATUSES.slice(0, 3).map(([k, l]) => `<option value="${k}" ${k === "to-read" ? "selected" : ""}>${l}</option>`).join("")}</select><button class="btn sm" data-act="r-addres" data-i="${i}">Add</button></span></div></li>`).join("")}</ul>` : ""}
+      <span class="rl-m"><select data-act="noop" id="rs-st-${i}" style="width:auto">${STATUSES.slice(0, 4).map(([k, l]) => `<option value="${k}" ${k === "to-read" ? "selected" : ""}>${l}</option>`).join("")}</select><button class="btn sm" data-act="r-addres" data-i="${i}">Add</button></span></div></li>`).join("")}</ul>` : ""}
   </div>
   <h2>Or add it by hand</h2>
   <div class="box"><form data-form="rmanual" class="form-grid">
@@ -1865,7 +2095,7 @@ function readAdd() {
     <label>&nbsp;<button class="btn primary" type="submit">Add book</button></label></form></div>`;
 }
 function readImport() {
-  const b = readUI.bulk; const missing = allBooks().filter((x) => !x.olKey && (!x.cover || !x.pages)).length;
+  const b = readUI.bulk; const missing = allBooks().filter((x) => !x.olKey && !x.olTried && (!x.cover || !x.pages)).length;
   return `${readTabs("import")}
   <h2>Import from StoryGraph</h2>
   <div class="box"><p style="font-size:14px">In StoryGraph: <b>Manage Account → Export StoryGraph Library</b>, then choose the file here. Your read dates, ratings, moods, pace, formats and statuses come across, and books already on your shelves are matched instead of duplicated.</p>
@@ -1916,11 +2146,13 @@ function readBook(id) {
 }
 pages.reading = (param) => {
   const p = param || "";
-  const body = p === "stats" ? readStats() : p === "library" ? readLibrary() : p === "add" ? readAdd() : p === "import" ? readImport() : p.startsWith("b-") ? readBook(p.slice(2)) : readHome();
+  const body = p === "stats" ? readStats() : p === "challenges" ? readChallenges() : p === "tbr" ? readTBR() : p === "wishlist" ? readWish() : p === "read" ? readRead() : p === "library" ? readLibrary() : p === "add" ? readAdd() : p === "import" ? readImport() : p.startsWith("b-") ? readBook(p.slice(2)) : readHome();
   return `<header class="page-head"><h1>Reading</h1><p class="subtitle">Your books, your progress, your stats.</p></header>${body}`;
 };
 pages.reading.after = () => {
   const q = document.querySelector('[data-act="r-libq"]'); if (q && readUI.libQ) { q.value = readUI.libQ; filterLib(readUI.libQ); }
+  // fetch missing covers and page counts from Open Library in the background, once per visit
+  if (!readUI.autoCovers && apiAvailable()) { readUI.autoCovers = true; setTimeout(bulkLookup, 800); }
 };
 function filterLib(v) { readUI.libQ = v; const s = v.trim().toLowerCase(); document.querySelectorAll(".rlib-row[data-s]").forEach((li) => { li.style.display = !s || li.dataset.s.includes(s) ? "" : "none"; }); }
 document.addEventListener("input", (e) => { if (e.target.dataset && e.target.dataset.act === "r-libq") filterLib(e.target.value); });
@@ -1931,6 +2163,9 @@ document.addEventListener("click", (e) => {
     case "r-edit": readUI.edit = ds.id || null; render(); return;
     case "r-finish": { const b = bookById(ds.id); patchBook(ds.id, { status: "read", finished: today(), started: b.started || null, progress: b.pages || b.progress, pct: 1 }); readUI.edit = null; commit(false); location.hash = `#reading/b-${ds.id}`; return; }
     case "r-lookup": lookupBook(ds.id); return;
+    case "r-start": { const b = bookById(ds.id); patchBook(ds.id, { status: "reading", started: b.started || today() }); commit(); return; }
+    case "r-bought": { patchBook(ds.id, { status: "to-read", owned: true }); commit(); return; }
+    case "r-chdel": { if (!confirmSafe("Delete this challenge?")) return; R().challenges = (R().challenges || []).filter((c) => c.id !== ds.id); commit(); return; }
     case "r-bulk": bulkLookup(); return;
     case "r-bulkstop": readUI.bulk = null; commit(); return;
     case "r-export": exportReadingCSV(); return;
@@ -1973,6 +2208,8 @@ document.addEventListener("submit", async (e) => {
     p.sessions = [...(b.sessions || []), s];
     patchBook(v.id, p); readUI.edit = null; commit(); return;
   }
+  if (kind === "rchallenge") { const r = R(); r.challenges = r.challenges || []; r.challenges.push({ id: Date.now().toString(36), name: v.name.trim(), kind: v.kind, target: num(v.target), genre: v.genre.trim(), year: num(v.year) || Number(today().slice(0, 4)) }); commit(); return; }
+  if (kind === "rwish") { const id = "u-" + Date.now().toString(36); patchBook(id, { title: v.title.trim(), author: v.author.trim(), status: "wishlist", format: "print", genres: [], added: today() }); commit(); lookupBook(id, true).then(() => commit()); return; }
   if (kind === "rgoal") { R().goals[v.year] = { books: num(v.books), pages: num(v.pages), hours: num(v.hours) }; commit(); return; }
   if (kind === "rmanual") {
     const id = "u-" + Date.now().toString(36);
@@ -1988,6 +2225,233 @@ document.addEventListener("submit", async (e) => {
     patchBook(v.id, p); commit();
   }
 });
+
+/* ============================== Personal ============================== */
+pages.about = () => {
+  const A = P.about; const t = today();
+  return `<header class="page-head"><h1>About Me</h1><p class="subtitle">From Part 1 of the plan. Everything else traces back to this.</p></header>
+  <div class="box prose">${A.intro.map((p) => `<p>${esc(p)}</p>`).join("")}</div>
+  <h2>My life goals <span class="h-note">the dream and the realistic version; landing anywhere in between counts as a win</span></h2>
+  <div class="grid g3" style="align-items:start">${A.goals.map(([h, list], gi) => `<div class="box"><h3>${esc(h)}</h3><ol class="goal-list" start="${A.goals.slice(0, gi).reduce((n, g) => n + g[1].length, 1)}">${list.map(([n, d]) => `<li><b>${esc(n)}</b>${d ? `<div class="sub">${esc(d)}</div>` : ""}</li>`).join("")}</ol></div>`).join("")}</div>
+  <h2>Horizons</h2>
+  <div class="box"><ul class="timeline" style="--mc:var(--brass)">${P.horizons.map((h) => `<li class="${t >= h.start && (!h.end || t < h.end) ? "now" : ""}"><span class="tl-dot"></span><span class="tl-when">${esc(h.years)}</span><div class="tl-body"><b>Horizon ${h.n}: ${esc(h.name)}</b>${t >= h.start && (!h.end || t < h.end) ? ` <span class="chip good">Now</span>` : ""}<div class="sub">Ages ${esc(h.ages)}</div></div></li>`).join("")}</ul></div>
+  <h2>Life domains</h2>
+  <div class="box"><p style="margin:0 0 12px">${esc(A.domainsWhy)}</p><div class="row">${P.domains.map((d) => `<a class="chip" href="#${ROUTES.find((r) => r.dom === d.id).id}"><span class="dot" style="background:${d.color}"></span>${esc(d.name)}</a>`).join("")}</div></div>
+  <h2>Guardrails</h2>
+  <div class="grid g3">${P.guardrails.map(([n, d]) => `<div class="box tight"><h3 style="margin-bottom:4px">${esc(n)}</h3><div class="sub" style="font-size:13px">${esc(d)}</div></div>`).join("")}</div>`;
+};
+
+let jDate = null;
+pages.journal = () => {
+  const t = today(); const d = jDate || t; const J = PRIV().journal; const e = J[d] || {};
+  const past = Object.keys(J).filter((k) => J[k] && J[k].text).sort().reverse();
+  const month = past.filter((k) => k.slice(0, 7) === t.slice(0, 7)).length;
+  return `<header class="page-head"><h1>Journal</h1><p class="subtitle">Private to you: only your login can see these entries.</p></header>
+  <div class="daynav">
+    <button class="btn sm" data-act="j-day" data-n="-1">‹ Previous day</button>
+    <strong style="font-size:16px;margin:0 6px">${fmtLong(d)}</strong>
+    <button class="btn sm" data-act="j-day" data-n="1" ${d >= t ? "disabled" : ""}>Next day ›</button>
+    ${d !== t ? `<button class="btn sm" data-act="j-day" data-n="0">Back to today</button>` : ""}
+    <input type="date" data-act="j-pick" value="${d}" max="${t}" style="width:auto;margin-left:auto">
+  </div>
+  <form data-form="journal" class="box"><input type="hidden" name="date" value="${d}">
+    <textarea name="text" class="journal-text" placeholder="What happened today? What's on your mind?">${esc(e.text || "")}</textarea>
+    <div class="row" style="margin-top:10px"><label class="ci-time">Minutes spent <input type="number" name="mins" min="0" value="${e.mins || ""}" style="width:90px"></label>
+      <span class="sub" style="margin:0">30 minutes or more ticks “Journal” on the daily check-in.</span>
+      <button class="btn primary" type="submit" style="margin-left:auto">Save entry</button></div>
+    ${e.saved ? `<div class="sub" style="margin-top:6px">Last saved ${new Date(e.saved).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}</div>` : ""}
+  </form>
+  <h2>Past entries <span class="h-note">${plural(past.length, "entry")} · ${month} this month</span></h2>
+  <div class="box">${past.length ? `<ul class="j-list">${past.slice(0, 60).map((k) => `<li><button data-act="j-open" data-date="${k}" class="${k === d ? "on" : ""}"><b>${fmt(k, { weekday: "short", day: "numeric", month: "short", year: "numeric" })}</b>${J[k].mins ? ` <span class="chip">${J[k].mins} min</span>` : ""}<span class="sub">${esc(J[k].text.slice(0, 160))}${J[k].text.length > 160 ? "…" : ""}</span></button></li>`).join("")}</ul>` : `<div class="empty">No entries yet.</div>`}</div>`;
+};
+
+/* ============================== Contacts ============================== */
+const contactUI = { open: null, edit: false, cat: "all" };
+const initials = (n) => String(n || "?").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+const avatar = (c, cls = "") => c.photo ? `<img class="avatar ${cls}" src="${c.photo}" alt="">` : `<span class="avatar ${cls}">${c.category === "pets" ? "🐾" : esc(initials(c.name))}</span>`;
+const nextBday = (c) => { if (!c.birthday) return null; const t = today(); let d = `${t.slice(0, 4)}-${c.birthday.slice(5)}`; if (d < t) d = `${Number(t.slice(0, 4)) + 1}-${c.birthday.slice(5)}`; return d; };
+const bdayTxt = (c) => c.birthday ? (c.birthday.startsWith("0000") ? fmt("2000" + c.birthday.slice(4), { day: "numeric", month: "long" }) : fmt(c.birthday, { day: "numeric", month: "long", year: "numeric" })) : "";
+pages.contacts = () => {
+  const list = contacts().slice().sort((a, b) => a.name.localeCompare(b.name));
+  const f = contactUI.cat; const show = list.filter((c) => f === "all" || c.category === f);
+  const t = today();
+  const soon = list.filter((c) => c.birthday).map((c) => ({ c, d: nextBday(c) })).filter((x) => daysBetween(t, x.d) <= 45).sort((a, b) => a.d.localeCompare(b.d));
+  const catName = Object.fromEntries(CONTACT_CATS);
+  return `<header class="page-head"><h1>Family & Found Family</h1><p class="subtitle">Everyone in our circle, with the details that help me show up for them.</p></header>
+  ${soon.length ? `<div class="box tight" style="margin-bottom:14px"><b>Birthdays coming up:</b> ${soon.map(({ c, d }) => `${esc(c.name)} ${fmtShort(d)} (${relDays(d)}${ageOn(c.birthday, d) != null ? `, turns ${ageOn(c.birthday, d)}` : ""})`).join(" · ")}</div>` : ""}
+  <div class="row" style="margin-bottom:14px"><div class="seg" style="margin-left:0">${[["all", "Everyone"], ...CONTACT_CATS].map(([k, l]) => `<button data-act="ct-cat" data-k="${k}" class="${f === k ? "on" : ""}">${l} <span class="muted">${k === "all" ? list.length : list.filter((c) => c.category === k).length}</span></button>`).join("")}</div>
+    <button class="btn primary" data-act="ct-new" style="margin-left:auto">+ Add a person</button></div>
+  <div class="grid ct-grid">${show.map((c) => { const age = ageOn(c.birthday, t);
+    return `<button class="box ct-card" data-act="ct-open" data-id="${c.id}">${avatar(c)}<div class="ct-body"><b>${esc(c.name)}</b>
+      <div class="sub">${c.birthday ? `🎂 ${bdayTxt(c)}${age != null ? ` · ${age} years old` : ""}` : `<span class="muted">No birthday yet</span>`}</div>
+      <div class="sub">${c.address ? esc(c.address.split("\n")[0]) : ""}</div>
+      <span class="chip" style="margin-top:6px">${esc(catName[c.category] || "")}</span></div></button>`; }).join("") || `<div class="box empty">Nobody in this group yet.</div>`}</div>
+  ${contactModal()}`;
+};
+function contactModal() {
+  if (!contactUI.open) return "";
+  const isNew = contactUI.open === "new"; const c = isNew ? { category: "family" } : contacts().find((x) => x.id === contactUI.open); if (!c) return "";
+  const t = today(); const age = ageOn(c.birthday, t); const catName = Object.fromEntries(CONTACT_CATS);
+  if (!isNew && !contactUI.edit) {
+    const line = (k, v, html) => v ? `<div class="ct-line"><span class="label">${k}</span><span>${html || esc(v)}</span></div>` : "";
+    return `<div class="modal-bg" data-act="ct-close"><div class="modal ct-modal" data-act="noop" role="dialog" aria-label="${esc(c.name)}">
+      <div class="row" style="flex-wrap:nowrap;gap:16px;align-items:center">${avatar(c, "lg")}<div style="flex:1"><h3 style="font-size:22px;margin:0">${esc(c.name)}</h3><span class="chip">${esc(catName[c.category] || "")}</span></div><button class="x-btn" data-act="ct-close" aria-label="Close">×</button></div>
+      <div style="margin-top:14px">
+        ${line("Birthday", c.birthday, `${bdayTxt(c)}${age != null ? ` · ${age} years old` : ""}${c.birthday ? ` · next ${relDays(nextBday(c))}` : ""}`)}
+        ${line("Address", c.address, esc(c.address || "").replace(/\n/g, "<br>"))}
+        ${line("Telephone", c.phone, `<a href="tel:${esc((c.phone || "").replace(/[^\d+]/g, ""))}">${esc(c.phone)}</a>`)}
+        ${line("Email", c.email, `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>`)}
+        ${line("Notes", c.notes, esc(c.notes || "").replace(/\n/g, "<br>"))}
+        ${!c.birthday && !c.address && !c.phone && !c.email ? `<div class="sub">No details yet. Press Edit to add them.</div>` : ""}
+      </div>
+      <div class="row" style="margin-top:16px;justify-content:flex-end"><button class="btn danger" data-act="ct-del" data-id="${c.id}">Delete</button><button class="btn primary" data-act="ct-edit">Edit</button></div>
+    </div></div>`;
+  }
+  return `<div class="modal-bg" data-act="ct-close"><div class="modal ct-modal" data-act="noop" role="dialog" aria-label="${isNew ? "Add a person" : "Edit " + esc(c.name)}">
+    <form data-form="contact"><input type="hidden" name="id" value="${isNew ? "" : esc(c.id)}">
+      <div class="row" style="gap:14px;align-items:center;flex-wrap:nowrap">${avatar(c, "lg")}<div><label class="btn sm">Choose a photo<input type="file" accept="image/*" data-act="ct-photo" hidden></label>${c.photo ? ` <button type="button" class="btn sm" data-act="ct-nophoto">Remove photo</button>` : ""}<div class="sub">Shrunk to a small square before it's saved.</div></div></div>
+      <div class="form-grid" style="margin-top:12px">
+        <label>Name<input type="text" name="name" value="${esc(c.name || "")}" required></label>
+        <label>Category<select name="category">${CONTACT_CATS.map(([k, l]) => `<option value="${k}" ${c.category === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+        <label>Birthday<input type="date" name="birthday" value="${c.birthday && !c.birthday.startsWith("0000") ? c.birthday : ""}"></label>
+        <label>Telephone<input type="tel" name="phone" value="${esc(c.phone || "")}"></label>
+        <label>Email<input type="email" name="email" value="${esc(c.email || "")}"></label>
+      </div>
+      <label class="blk">Address<textarea name="address" rows="3">${esc(c.address || "")}</textarea></label>
+      <label class="blk">Notes<textarea name="notes" rows="3">${esc(c.notes || "")}</textarea></label>
+      <div class="row" style="margin-top:14px;justify-content:flex-end"><button type="button" class="btn" data-act="ct-close">Cancel</button><button class="btn primary" type="submit">Save</button></div>
+    </form></div></div>`;
+}
+let ctPhotoDraft = undefined; // photo picked in the edit form, saved on Save
+function shrinkPhoto(file) {
+  return new Promise((res, rej) => {
+    const img = new Image(); const url = URL.createObjectURL(file);
+    img.onload = () => { const S = 240; const c = document.createElement("canvas"); c.width = c.height = S; const k = Math.max(S / img.width, S / img.height); const w = img.width * k, h = img.height * k;
+      c.getContext("2d").drawImage(img, (S - w) / 2, (S - h) / 2, w, h); URL.revokeObjectURL(url); res(c.toDataURL("image/jpeg", 0.82)); };
+    img.onerror = rej; img.src = url;
+  });
+}
+
+/* ============================== Health trackers ============================== */
+const medsList = () => { const m = PRIV().meds; if (!m.list) m.list = []; return m.list; };
+const medsTaken = (d) => PRIV().meds.log[d] || {};
+let medsDate = null;
+pages.meds = () => {
+  const t = today(); const d = medsDate || t; const list = medsList(); const log = medsTaken(d);
+  const days = Array.from({ length: 14 }, (_, i) => addDays(t, i - 13));
+  return `<header class="page-head"><h1>Meds tracker</h1><p class="subtitle">Private to you. Ticking every med for the day also ticks “Take meds” on the daily check-in.</p></header>
+  <div class="daynav"><button class="btn sm" data-act="md-day" data-n="-1">‹</button><strong style="font-size:16px;margin:0 6px">${fmtLong(d)}</strong><button class="btn sm" data-act="md-day" data-n="1" ${d >= t ? "disabled" : ""}>›</button>${d !== t ? `<button class="btn sm" data-act="md-day" data-n="0">Today</button>` : ""}</div>
+  <div class="box">${list.length ? list.map((m) => `<div class="checkin-row">${chk(!!log[m.id], "md-tick", `data-id="${m.id}" data-date="${d}"`, "big-chk")}
+      <div class="ci-text"><b>${esc(m.name)}</b>${m.dose ? ` <span class="chip">${esc(m.dose)}</span>` : ""}<div class="sub">${esc(m.when || "")}${m.notes ? ` · ${esc(m.notes)}` : ""}</div></div>
+      <div class="days14">${days.map((x) => `<span class="${medsTaken(x)[m.id] ? "on" : ""}" title="${fmtShort(x)}"></span>`).join("")}</div>
+      <button class="x-btn" data-act="md-del" data-id="${m.id}" title="Remove">×</button></div>`).join("") : `<div class="empty">Add your meds below and tick them off each day.</div>`}</div>
+  <h2>Add a med</h2>
+  <div class="box"><form data-form="med" class="form-grid">
+    <label>Name<input type="text" name="name" required></label><label>Dose<input type="text" name="dose" placeholder="e.g. 20 mg"></label>
+    <label>When<select name="when"><option>Morning</option><option>Midday</option><option>Evening</option><option>Bedtime</option><option>As needed</option></select></label>
+    <label>Notes<input type="text" name="notes" placeholder="with food, refill date…"></label>
+    <label>&nbsp;<button class="btn primary" type="submit">Add</button></label></form></div>`;
+};
+
+const MOOD_SCALES = [["mood", "Mood", ["Awful", "Low", "Okay", "Good", "Great"]], ["anxiety", "Anxiety", ["None", "A little", "Some", "High", "Very high"]], ["energy", "Energy", ["Drained", "Low", "Okay", "Good", "Full"]]];
+let moodDate = null;
+pages.mood = () => {
+  const t = today(); const d = moodDate || t; const M = PRIV().mood; const e = M[d] || {};
+  const days = Array.from({ length: 30 }, (_, i) => addDays(t, i - 29));
+  const avg = (k, n) => { const v = days.slice(-n).map((x) => (M[x] || {})[k]).filter(Boolean); return v.length ? (sum(v) / v.length).toFixed(1) : "–"; };
+  const therapy = days.filter((x) => (M[x] || {}).therapy).length;
+  return `<header class="page-head"><h1>Mental health</h1><p class="subtitle">Private to you. A quick check-in each day shows patterns over time.</p></header>
+  <div class="daynav"><button class="btn sm" data-act="mo-day" data-n="-1">‹</button><strong style="font-size:16px;margin:0 6px">${fmtLong(d)}</strong><button class="btn sm" data-act="mo-day" data-n="1" ${d >= t ? "disabled" : ""}>›</button>${d !== t ? `<button class="btn sm" data-act="mo-day" data-n="0">Today</button>` : ""}</div>
+  <div class="box">${MOOD_SCALES.map(([k, l, words]) => `<div class="mood-row"><span class="label">${l}</span><div class="seg" style="margin-left:0">${words.map((w, i) => `<button data-act="mo-set" data-k="${k}" data-v="${i + 1}" data-date="${d}" class="${e[k] === i + 1 ? "on" : ""}">${i + 1} · ${w}</button>`).join("")}</div></div>`).join("")}
+    <div class="mood-row"><span class="label">Therapy</span><label class="row" style="font-size:14px"><input type="checkbox" data-act="mo-therapy" data-date="${d}" ${e.therapy ? "checked" : ""} style="width:auto"> Had a therapy session today</label></div>
+    <label class="blk">Notes<textarea data-act="mo-note" data-date="${d}" placeholder="What affected how you felt?">${esc(e.note || "")}</textarea></label></div>
+  <div class="grid g4" style="margin-top:14px">
+    <div class="box tight"><div class="label">Mood, last 7 days</div><div class="big md">${avg("mood", 7)}</div><div class="sub">30 days: ${avg("mood", 30)} (1-5)</div></div>
+    <div class="box tight"><div class="label">Anxiety, last 7 days</div><div class="big md">${avg("anxiety", 7)}</div><div class="sub">30 days: ${avg("anxiety", 30)} (1-5)</div></div>
+    <div class="box tight"><div class="label">Energy, last 7 days</div><div class="big md">${avg("energy", 7)}</div><div class="sub">30 days: ${avg("energy", 30)} (1-5)</div></div>
+    <div class="box tight"><div class="label">Therapy sessions</div><div class="big md">${therapy}</div><div class="sub">in the last 30 days</div></div>
+  </div>
+  <h2>Last 30 days</h2>
+  <div class="box scroll-x"><div class="heat">${MOOD_SCALES.map(([k, l]) => `<span class="label">${l}</span>${days.map((x) => { const v = (M[x] || {})[k]; return `<span class="hc" style="${v ? `background:color-mix(in srgb, var(--${k === "anxiety" ? "d-health" : k === "energy" ? "d-finances" : "accent"}) ${v * 20}%, var(--panel-2))` : ""}" data-tip="${esc(`${fmt(x, { weekday: "short", day: "numeric", month: "short" })}<br>${l}: <b>${v || "–"}</b>`)}"></span>`; }).join("")}`).join("")}
+    <span></span>${days.map((x, i) => `<span class="hl">${i % 7 === 0 || i === 29 ? parseD(x).getDate() : ""}</span>`).join("")}</div>
+    <div class="sub" style="margin-top:8px">Darker = higher. For anxiety, darker means more anxious.</div></div>`;
+};
+
+const FLOWS = [["spotting", "Spotting"], ["light", "Light"], ["medium", "Medium"], ["heavy", "Heavy"]];
+function cycleInfo() {
+  const days = PRIV().cycle.days; const flowDays = Object.keys(days).filter((d) => days[d] && days[d] !== "spotting").sort();
+  const starts = flowDays.filter((d) => !days[addDays(d, -1)] || days[addDays(d, -1)] === "spotting").filter((d, i, arr) => !i || daysBetween(arr[i - 1], d) > 10);
+  const lens = starts.slice(1).map((d, i) => daysBetween(starts[i], d)).filter((n) => n >= 18 && n <= 45).slice(-6);
+  const cycleLen = lens.length ? Math.round(sum(lens) / lens.length) : 28;
+  const periodLens = starts.map((s) => { let n = 0; while (days[addDays(s, n)] && days[addDays(s, n)] !== "spotting" && n < 15) n++; return n; }).slice(-6);
+  const periodLen = periodLens.length ? Math.round(sum(periodLens) / periodLens.length) : 5;
+  const last = starts[starts.length - 1] || null; const t = today();
+  let next = last ? addDays(last, cycleLen) : null; while (next && next < t) next = addDays(next, cycleLen);
+  return { starts, cycleLen, periodLen, last, next, day: last ? daysBetween(last, t) + 1 : null, measured: lens.length };
+}
+let cycleMonth = 0;
+pages.cycle = () => {
+  const t = today(); const C = PRIV().cycle.days; const ci = cycleInfo();
+  const first = addMonths(t.slice(0, 8) + "01", cycleMonth); const start = sundayOf(first); const end = addDays(sundayOf(addDays(addMonths(first, 1), -1)), 6);
+  const predicted = new Set(); if (ci.next) for (let n = 0; n < 3; n++) for (let i = 0; i < ci.periodLen; i++) predicted.add(addDays(ci.next, n * ci.cycleLen + i));
+  const days = []; for (let d = start; d <= end; d = addDays(d, 1)) days.push(d);
+  return `<header class="page-head"><h1>Period tracker</h1><p class="subtitle">Private to you. Tap a day to log flow; tap again to change it.</p></header>
+  <div class="grid g4">
+    <div class="box tight"><div class="label">Cycle day</div><div class="big md">${ci.day ? ci.day : "–"}</div><div class="sub">${ci.last ? `Last period started ${fmt(ci.last)}` : "Log your last period to start"}</div></div>
+    <div class="box tight"><div class="label">Next period (estimate)</div><div class="big md">${ci.next ? fmtShort(ci.next) : "–"}</div><div class="sub">${ci.next ? relDays(ci.next) : ""}</div></div>
+    <div class="box tight"><div class="label">Average cycle</div><div class="big md">${ci.cycleLen} days</div><div class="sub">${ci.measured ? `from ${plural(ci.measured, "cycle")}` : "assumed until 2 periods are logged"}</div></div>
+    <div class="box tight"><div class="label">Average period</div><div class="big md">${ci.periodLen} days</div><div class="sub">${ci.starts.length ? `from ${plural(Math.min(6, ci.starts.length), "period")}` : "assumed"}</div></div>
+  </div>
+  <div class="box" style="margin-top:14px"><div class="dc-head"><h3>${fmt(first, { month: "long", year: "numeric" })}</h3><span class="row" style="gap:4px">${cycleMonth ? `<button class="btn sm" data-act="cy-month" data-n="0">This month</button>` : ""}<button class="x-btn" data-act="cy-month" data-n="-1">‹</button><button class="x-btn" data-act="cy-month" data-n="1">›</button></span></div>
+    <div class="cy-grid">${DOW.map((x) => `<span class="dm-h">${x}</span>`).join("")}${days.map((d) => { const f = C[d]; return `<button class="cy-day ${d.slice(0, 7) !== first.slice(0, 7) ? "out" : ""} ${d === t ? "today" : ""} ${f ? "f-" + f : predicted.has(d) ? "pred" : ""}" data-act="cy-tap" data-date="${d}" ${d > t ? "disabled" : ""} title="${fmtLong(d)}${f ? " · " + f : predicted.has(d) ? " · predicted" : ""}"><span>${parseD(d).getDate()}</span>${f ? `<small>${f}</small>` : ""}</button>`; }).join("")}</div>
+    <div class="legend" style="margin-top:10px">${FLOWS.map(([k, l]) => `<span><span class="cy-key f-${k}"></span>${l}</span>`).join("")}<span><span class="cy-key pred"></span>Predicted</span></div>
+    <div class="sub" style="margin-top:6px">Estimates are only a guide and get better as you log more cycles.</div></div>`;
+};
+
+/* ============================== Travel ============================== */
+const bucketKeys = { all: "bucketAll", eu: "bucket" };
+function bucketBox(which, title, note) {
+  const list = ensureList(bucketKeys[which]);
+  return `<div><h2>${title} <span class="h-note">${list.filter((b) => b.done).length} / ${list.length} done${note ? " · " + note : ""}</span></h2><div class="box">
+    ${list.length ? `<ul class="list-edit">${list.map((b, i) => `<li>${chk(b.done, "bl-tick", `data-w="${which}" data-i="${i}"`)}<span class="grow ${b.done ? "muted" : ""}" style="${b.done ? "text-decoration:line-through" : ""}">${i + 1}. ${esc(b.t)}</span>${b.done && b.date ? `<span class="sub" style="margin:0">${fmt(b.date)}</span>` : ""}<button class="x-btn" data-act="bl-del" data-w="${which}" data-i="${i}" title="Remove">×</button></li>`).join("")}</ul>` : `<div class="empty">Nothing here yet.</div>`}
+    <input type="text" placeholder="+ Add a place or experience and press Enter" data-act="bl-add" data-w="${which}" style="margin-top:10px"></div></div>`;
+}
+pages.bucket = () => `<header class="page-head"><h1>Bucket lists</h1><p class="subtitle">The living, not just the planning for later.</p></header>
+  <div class="grid g2" style="align-items:start">${bucketBox("all", "My full bucket list", "")}${bucketBox("eu", "European bucket list", "2026-2029, while we're in Germany")}</div>`;
+
+const allTravels = () => [...(window.TRAVELS || []).map((x, i) => ({ ...x, id: "fb" + i })), ...(state.travels || []).map((x, i) => ({ ...x, id: "u" + i, mine: true }))];
+let travelYear = "all";
+pages.places = () => {
+  const all = allTravels(); const years = [...new Set(all.map((x) => x.year || (x.date || "").slice(0, 4)).filter(Boolean))].sort().reverse();
+  const countries = new Set(all.map((x) => x.country).filter(Boolean));
+  const show = all.filter((x) => travelYear === "all" || (x.year || (x.date || "").slice(0, 4)) === travelYear);
+  const byYear = {}; show.forEach((x) => { const y = x.year || (x.date || "").slice(0, 4) || "Undated"; const tr = x.trip || x.place; ((byYear[y] = byYear[y] || {})[tr] = byYear[y][tr] || []).push(x); });
+  const when = (list) => { const ds = list.map((x) => x.date).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort(); const ends = list.map((x) => x.end || x.date).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+    if (!ds.length) { const m = list.map((x) => x.date).find((d) => /^\d{4}-\d{2}$/.test(d)); return m ? fmt(m + "-01", { month: "long" }) : ""; }
+    const a = ds[0], b = ends[ends.length - 1]; return a === b ? fmt(a, { day: "numeric", month: "short" }) : `${fmt(a, { day: "numeric", month: "short" })} – ${fmt(b, { day: "numeric", month: "short" })}`; };
+  return `<header class="page-head"><h1>Past travels</h1><p class="subtitle">Places I've been, by year. Pulled from Facebook on 1 Nov 2026, plus anything added here.</p></header>
+  <div class="grid g3">
+    <div class="box tight"><div class="label">Places</div><div class="big md">${all.length}</div></div>
+    <div class="box tight"><div class="label">Countries</div><div class="big md">${countries.size}</div><div class="sub">${[...countries].sort().slice(0, 40).join(", ")}</div></div>
+    <div class="box tight"><div class="label">Years of travel</div><div class="big md">${years.length}</div><div class="sub">${years[years.length - 1] || ""} – ${years[0] || ""}</div></div>
+  </div>
+  <h2>Map</h2>
+  <div class="box" style="padding:0;overflow:hidden"><iframe class="places-map" src="places.html" title="Map of places I've been" loading="lazy"></iframe></div>
+  <div class="sub" style="margin-top:6px">The map shows the places from the Facebook pull. Trips added below show in the list.</div>
+  <h2>By year</h2>
+  <div class="row" style="margin-bottom:12px"><div class="seg" style="margin-left:0;flex-wrap:wrap">${["all", ...years].map((y) => `<button data-act="tr-year" data-y="${y}" class="${travelYear === y ? "on" : ""}">${y === "all" ? "All years" : y}</button>`).join("")}</div></div>
+  ${Object.keys(byYear).sort().reverse().map((y) => `<h3 class="ryear">${y} <span class="muted">· ${plural(Object.keys(byYear[y]).length, "trip")}</span></h3><div class="box"><ul class="trips">
+    ${Object.entries(byYear[y]).sort((a, b) => (b[1][0].date || "").localeCompare(a[1][0].date || "")).map(([trip, list]) => { const where = [...new Set(list.map((x) => [x.city, x.country].filter(Boolean).join(", ")).filter(Boolean))];
+      return `<li><div class="trip-when">${when(list)}</div><div><b>${esc(trip)}</b><div class="sub">${esc(where.join(" · ") || "No place given")}</div>
+        ${list.length > 1 || list[0].place !== trip ? `<div class="trip-places">${list.map((x) => `<span class="chip">${esc(x.place)}${x.mine ? ` <button class="x-btn" data-act="tr-del" data-i="${x.id.slice(1)}" title="Remove">×</button>` : ""}</span>`).join("")}</div>` : list[0].mine ? `<button class="x-btn" data-act="tr-del" data-i="${list[0].id.slice(1)}" title="Remove">× remove</button>` : ""}
+        ${list.map((x) => x.notes).filter(Boolean).length ? `<div class="sub">${esc([...new Set(list.map((x) => x.notes).filter(Boolean))].join(" · "))}</div>` : ""}</div></li>`; }).join("")}</ul></div>`).join("")}
+  <h2>Add a trip or place</h2>
+  <div class="box"><form data-form="travel" class="form-grid">
+    <label>Date<input type="date" name="date" required></label><label>End date<input type="date" name="end"></label>
+    <label>Place<input type="text" name="place" placeholder="e.g. Christmas market" required></label><label>City / region<input type="text" name="city"></label>
+    <label>Country<input type="text" name="country"></label><label>Trip name<input type="text" name="trip" placeholder="Groups places into one trip"></label>
+    <label>&nbsp;<button class="btn primary" type="submit">Add</button></label></form></div>`;
+};
 
 pages.settings = () => `
   <h1>Settings & backup</h1>
@@ -2046,13 +2510,14 @@ function render() {
   lastRoute = key;
   setSync(sync.status);
 }
-window.addEventListener("hashchange", () => { ciDate = null; cal.modal = null; render(); });
+window.addEventListener("hashchange", () => { ciDate = null; cal.modal = null; contactUI.open = null; render(); });
 
 /* ============================== events ============================== */
 const ensureSpaces = () => { if (!state.spaces) state.spaces = P.defaults.homeSpaces.map((s) => ({ name: s.name, month: s.month, tasks: s.tasks.map((x) => ({ t: x, done: false })) })); return state.spaces; };
 const ensureList = (k) => { if (!state[k]) state[k] = JSON.parse(JSON.stringify(P.defaults[k])); return state[k]; };
 
 document.addEventListener("click", (e) => {
+  if (e.target.closest("a.signout")) { try { localStorage.removeItem(LS_KEY); } catch (x) {} return; }
   const el = e.target.closest("[data-act]"); if (!el) return;
   const a = el.dataset.act; const ds = el.dataset;
   if (el.tagName === "INPUT" || el.tagName === "SELECT" || el.tagName === "TEXTAREA") return;
@@ -2082,6 +2547,29 @@ document.addEventListener("click", (e) => {
     case "export": { exportState(); return; }
     case "print": { window.print(); return; }
     case "noop": return;
+    case "j-day": { const n = Number(ds.n); jDate = n === 0 ? null : addDays(jDate || today(), n); if (jDate && jDate >= today()) jDate = null; render(); return; }
+    case "j-open": { jDate = ds.date === today() ? null : ds.date; render(); window.scrollTo(0, 0); return; }
+    case "ct-cat": { contactUI.cat = ds.k; render(); return; }
+    case "ct-new": { contactUI.open = "new"; contactUI.edit = true; ctPhotoDraft = undefined; render(); return; }
+    case "ct-open": { contactUI.open = ds.id; contactUI.edit = false; ctPhotoDraft = undefined; render(); return; }
+    case "ct-edit": { contactUI.edit = true; ctPhotoDraft = undefined; render(); return; }
+    case "ct-close": { contactUI.open = null; contactUI.edit = false; render(); return; }
+    case "ct-nophoto": { ctPhotoDraft = null; const av = document.querySelector(".ct-modal .avatar.lg"); if (av) av.outerHTML = `<span class="avatar lg">–</span>`; el.remove(); return; }
+    case "ct-del": { const c = contacts().find((x) => x.id === ds.id); if (!c || !confirmSafe(`Delete ${c.name}?`)) return; state.contacts = contacts().filter((x) => x.id !== ds.id); contactUI.open = null; break; }
+    case "md-day": { const n = Number(ds.n); medsDate = n === 0 ? null : addDays(medsDate || today(), n); if (medsDate && medsDate >= today()) medsDate = null; render(); return; }
+    case "md-tick": { const m = PRIV().meds; const l = m.log[ds.date] = m.log[ds.date] || {}; l[ds.id] = !l[ds.id]; const list = medsList();
+      if (list.length) { const c = state.checkins[ds.date] = state.checkins[ds.date] || {}; c.meds = list.every((x) => l[x.id]); } break; }
+    case "md-del": { if (!confirmSafe("Remove this med from the list? Past ticks are kept.")) return; PRIV().meds.list = medsList().filter((x) => x.id !== ds.id); break; }
+    case "mo-day": { const n = Number(ds.n); moodDate = n === 0 ? null : addDays(moodDate || today(), n); if (moodDate && moodDate >= today()) moodDate = null; render(); return; }
+    case "mo-set": { const M = PRIV().mood; const e = M[ds.date] = M[ds.date] || {}; const v = Number(ds.v); e[ds.k] = e[ds.k] === v ? null : v; break; }
+    case "cy-month": { const n = Number(ds.n); cycleMonth = n === 0 ? 0 : cycleMonth + n; render(); return; }
+    case "cy-tap": { const D = PRIV().cycle.days; const order = ["", "light", "medium", "heavy", "spotting"]; const nx = order[(order.indexOf(D[ds.date] || "") + 1) % order.length]; if (nx) D[ds.date] = nx; else delete D[ds.date]; break; }
+    case "bl-tick": { const b = ensureList(bucketKeys[ds.w])[ds.i]; b.done = !b.done; b.date = b.done ? today() : null; break; }
+    case "bl-del": { if (!confirmSafe("Remove this from the list?")) return; ensureList(bucketKeys[ds.w]).splice(ds.i, 1); break; }
+    case "tr-year": { travelYear = ds.y; render(); return; }
+    case "tr-del": { if (!confirmSafe("Remove this place?")) return; (state.travels || []).splice(Number(ds.i), 1); break; }
+    case "dash-month": { const n = Number(ds.n); dashMonth = n === 0 ? 0 : dashMonth + n; render(); return; }
+    case "dash-day": { cal.date = ds.date; cal.view = "day"; miniAnchor = null; location.hash = "#calendar"; return; }
     case "garmin-refresh": { garmin.windows = []; garminEnsure(addDays(today(), -27), today(), true); return; }
     case "cal-view": { cal.view = ds.v; cal.modal = null; render(); return; }
     case "cal-today": { cal.date = today(); miniAnchor = null; render(); return; }
@@ -2113,6 +2601,12 @@ const confirmSafe = (m) => { try { return window.confirm(m); } catch (e) { retur
 document.addEventListener("change", (e) => {
   const el = e.target; const a = el.dataset.act; if (!a) return; const ds = el.dataset;
   switch (a) {
+    case "j-pick": { if (!el.value) return; jDate = el.value >= today() ? null : el.value; render(); return; }
+    case "ct-photo": { const file = el.files[0]; if (!file) return; shrinkPhoto(file).then((url) => { ctPhotoDraft = url; const av = document.querySelector(".ct-modal .avatar.lg"); if (av) av.outerHTML = `<img class="avatar lg" src="${url}" alt="">`; }).catch(() => alert("That picture couldn't be read. Try a JPG or PNG.")); return; }
+    case "mo-therapy": { const M = PRIV().mood; const e = M[ds.date] = M[ds.date] || {}; e.therapy = el.checked; break; }
+    case "mo-note": { const M = PRIV().mood; const e = M[ds.date] = M[ds.date] || {}; e.note = el.value; commit(false); return; }
+    case "ci-time": { const c = state.checkins[ds.date] = state.checkins[ds.date] || {}; const v = el.value; c[ds.h + "T"] = v || undefined;
+      c[ds.h] = ds.h === "work" ? (v ? v <= WORK_START : false) : !!v; break; }
     case "ci-note": { const c = state.checkins[ds.date] = state.checkins[ds.date] || {}; c.note = el.value; break; }
     case "r222-start": { if (!el.value) return; state.rule222.start = el.value; break; }
     case "sp-name": { ensureSpaces()[ds.si].name = el.value; break; }
@@ -2132,9 +2626,11 @@ document.addEventListener("change", (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && cal.modal) { cal.modal = null; render(); return; }
+  if (e.key === "Escape" && contactUI.open) { contactUI.open = null; render(); return; }
   const el = e.target; if (e.key !== "Enter" || !el.dataset || !el.dataset.act) return;
   const v = el.value.trim(); const a = el.dataset.act;
   if (a === "sp-add") { e.preventDefault(); if (!v) return; ensureSpaces()[el.dataset.si].tasks.push({ t: v, done: false }); commit(); }
+  if (a === "bl-add") { e.preventDefault(); if (!v) return; const w = el.dataset.w; ensureList(bucketKeys[w]).push({ t: v, done: false }); commit(); setTimeout(() => { const i = document.querySelector(`[data-act="bl-add"][data-w="${w}"]`); if (i) i.focus(); }, 0); }
   if (a === "bucket-add") { e.preventDefault(); if (!v) return; ensureList("bucket").push({ t: v, done: false }); commit(); setTimeout(() => { const i = document.querySelector('[data-act="bucket-add"]'); if (i) i.focus(); }, 0); }
 });
 document.addEventListener("submit", (e) => {
@@ -2148,6 +2644,21 @@ document.addEventListener("submit", (e) => {
     if (Object.keys(entry).length < 2) return;
     state.body.entries.push(entry);
   }
+  if (kind === "journal") {
+    const J = PRIV().journal; const mins = num(fd.mins); const text = (fd.text || "").trim();
+    if (!text && !mins) delete J[fd.date]; else J[fd.date] = { text, mins, saved: Date.now() };
+    if (mins >= 30) { const c = state.checkins[fd.date] = state.checkins[fd.date] || {}; c.journal = true; }
+  }
+  if (kind === "contact") {
+    const list = contacts(); const old = fd.id ? list.find((x) => x.id === fd.id) : null;
+    const c = { ...(old || { id: "c" + Date.now().toString(36) }), name: fd.name.trim(), category: fd.category, birthday: fd.birthday || (old && old.birthday && old.birthday.startsWith("0000") ? old.birthday : ""), phone: fd.phone.trim(), email: fd.email.trim(), address: fd.address.trim(), notes: fd.notes.trim() };
+    if (ctPhotoDraft !== undefined) c.photo = ctPhotoDraft || null;
+    if (old) Object.assign(old, c); else list.push(c);
+    contactUI.open = c.id; contactUI.edit = false; ctPhotoDraft = undefined;
+  }
+  if (kind === "med") medsList().push({ id: "m" + Date.now().toString(36), name: fd.name.trim(), dose: fd.dose.trim(), when: fd.when, notes: fd.notes.trim() });
+  if (kind === "travel") { state.travels = state.travels || []; const y = fd.date.slice(0, 4);
+    state.travels.push({ date: fd.date, end: fd.end && fd.end > fd.date ? fd.end : undefined, year: y, place: fd.place.trim(), city: fd.city.trim() || undefined, country: fd.country.trim() || undefined, trip: fd.trip.trim() || undefined, src: "Added here" }); travelYear = "all"; }
   if (kind === "country") ensureList("countries").push({ name: fd.name.trim(), date: fd.date || null });
   if (kind === "calev") {
     const allDay = !!fd.allDay;
@@ -2188,5 +2699,5 @@ document.addEventListener("mousemove", (e) => { if (tip.style.display !== "block
 
 applyGlass(new URLSearchParams(location.search).get("glass"));
 render();
-pullRemote();
+loadMe().then(() => { render(); return pullRemote(); });
 })();

@@ -14,6 +14,9 @@ finances and every Horizon 1 project.
 | `public/artifacts.js` | **The plan documents** shown on the Artifacts tab (meal plan, tri plans, study plan...). |
 | `public/books.js` | **Your library** (from the shelf photos) and the starting reading log. What you log on the Reading page is saved to the database. |
 | `public/calendar.js` | **Fixed dates** for the Calendar (paydays, races, Christmas plan, reviews). Events you add on the site are saved to the database instead. |
+| `public/travels.js` | **Places I've been** (175 places from the Facebook pull). Trips you add on the site are saved to the database. |
+| `public/places.html` | The Places I've Been map, shown on Travel → Past travels. |
+| `functions/_middleware.js` | **The login.** Every page and every /api call goes through it. |
 | `functions/api/garmin.js` | Reads your Garmin Connect data (read-only) through Garmin's official Personal API. |
 | `functions/api/gcal.js` | Reads your Google Calendars (read-only) so they show on the Calendar page. |
 | `functions/api/state.js` | Saves ticks and check-ins to the Cloudflare database so they sync between devices. |
@@ -24,8 +27,24 @@ files, so editing the plan never wipes your progress.
 
 ## How it's hosted
 - Cloudflare Pages project `project-me` → https://project-me-1tk.pages.dev
-- Login: Cloudflare Zero Trust → Access → Applications → Project Me (policy "mylogin")
+- Login: username + password (see "Login" below)
 - Database: Cloudflare KV namespace `project-me`, bound as `PROJECT_ME`
+
+## Login
+The site has its own sign-in page. Usernames and passwords live in the encrypted secret
+`LOGIN_USERS` (never in a file), written like this:
+
+    Casey=first-password;Amanda=second-password
+
+To set or change them, in the Codespace terminal (after the `export` lines):
+`npx wrangler@latest pages secret put LOGIN_USERS --project-name project-me`,
+paste the line, then publish. Usernames aren't case-sensitive; passwords are.
+Signing in lasts 30 days per device; "Sign out" is at the bottom of the menu.
+After 10 wrong passwords from one place, sign-in pauses for 15 minutes.
+
+Shared vs private: everyone who signs in sees the same plan, check-ins, calendar,
+reading and contacts. The **Journal, Mental health, Period tracker and Meds tracker**
+are stored separately for each login, so only you see yours.
 
 ## Google Calendar
 The site reads your Google Calendars through their private iCal addresses, stored as the
@@ -66,8 +85,9 @@ The two `export` lines are only needed once per terminal. Never put the token in
 
 ## Everyday use
 
-- **Daily check-in**: workout from whichever training plan is running, macros,
-  meds, German, study, notes. Use "Previous day" to fill in a day you missed.
+- **Daily check-in**: morning routine (wake time from Garmin, puppies, breakfast,
+  meds, Duo, on time for work), macros and this week's menu, then the evening routine
+  (workout, study, journal, reading, bedtime from Garmin). Use "Previous day" to fill in a day you missed.
 - **Monthly money check-in** (Finances page): add a snapshot with your wife.
   The KPI cards, net worth trend, debt timeline and savings bars update from it.
 - **Change the plan**: edit `public/data.js`, then publish (see above).
