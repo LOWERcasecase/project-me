@@ -7,61 +7,60 @@ finances and every Horizon 1 project.
 
 | File | What it is |
 |---|---|
-| `index.html`, `styles.css`, `app.js` | The site. No need to edit these. |
-| `data.js` | **The plan.** Projects, tasks, training plans, menus, finance snapshots. Edit this to change the plan. |
-| `functions/api/state.js` | A tiny server function that saves ticks and check-ins to a Cloudflare database so they sync between phone and laptop. |
+| `public/index.html`, `public/styles.css`, `public/app.js` | The site. No need to edit these. |
+| `public/theme.css` | **The look:** druid's grove & kitchen witch's hearth. Colours, fonts, knotwork, herbs. Change the variables at the top to retune it. |
+| `public/fonts/` | Cormorant Garamond and Lora, hosted with the site (open font licence). |
+| `public/data.js` | **The plan.** Projects, tasks, training plans, menus, finance snapshots. |
+| `public/artifacts.js` | **The plan documents** shown on the Artifacts tab (meal plan, tri plans, study plan...). |
+| `public/books.js` | **Your library** (from the shelf photos) and the starting reading log. What you log on the Reading page is saved to the database. |
+| `public/calendar.js` | **Fixed dates** for the Calendar (paydays, races, Christmas plan, reviews). Events you add on the site are saved to the database instead. |
+| `functions/api/garmin.js` | Reads your Garmin Connect data (read-only) through Garmin's official Personal API. |
+| `functions/api/gcal.js` | Reads your Google Calendars (read-only) so they show on the Calendar page. |
+| `functions/api/state.js` | Saves ticks and check-ins to the Cloudflare database so they sync between devices. |
+| `wrangler.toml` | Tells Cloudflare where the site and database are. |
 
-Everything you tick or type on the site (check-ins, sessions, measurements,
-monthly money snapshots, home spaces, bucket list) is saved to the database,
-not to `data.js`, so editing the plan never wipes your progress.
+Everything you tick or type on the site is saved to the database, not to the
+files, so editing the plan never wipes your progress.
 
----
+## How it's hosted
+- Cloudflare Pages project `project-me` → https://project-me-1tk.pages.dev
+- Login: Cloudflare Zero Trust → Access → Applications → Project Me (policy "mylogin")
+- Database: Cloudflare KV namespace `project-me`, bound as `PROJECT_ME`
 
-## One-time setup (about 20 minutes, all free)
+## Google Calendar
+The site reads your Google Calendars through their private iCal addresses, stored as the
+encrypted secret `GCAL_FEEDS` (never in a file). To add or change calendars:
 
-### 1. Make the GitHub repo private
-Repo → **Settings** → scroll to **Danger Zone** → **Change visibility** → **Private**.
-`data.js` contains personal and financial details, so the repo must stay private.
+1. Google Calendar on a computer → ⚙ Settings → click a calendar under "Settings for my calendars"
+   → "Integrate calendar" → copy **Secret address in iCal format**.
+2. In the Codespace terminal (after the `export` lines):
+   `npx wrangler@latest pages secret put GCAL_FEEDS --project-name project-me`
+   and paste all the addresses, separated by commas. Then publish.
 
-### 2. Upload these files
-Repo → **Add file → Upload files** → drag in everything from this folder,
-**including the `functions` folder** (drag the folder itself so the path stays
-`functions/api/state.js`). Commit.
+Skip "Workout Block" and "School/ Study Block": the site builds those from your plans.
 
-### 3. Create the site on Cloudflare Pages
-1. Sign up free at **dash.cloudflare.com**.
-2. **Workers & Pages → Create → Pages → Connect to Git**. Authorize GitHub and
-   pick this repo (Cloudflare can read private repos).
-3. Build settings: Framework preset **None**, build command **empty**,
-   build output directory **`/`**. Click **Save and Deploy**.
-4. You get an address like `project-me-abc.pages.dev`. Don't share it yet.
+## Garmin
+The site reads your Garmin data with Garmin's free Personal API. Your key is stored as the
+encrypted secret `GARMIN_API_KEY` (never in a file).
 
-### 4. Add the database (for syncing)
-1. **Storage & Databases → KV → Create** a namespace called `project-me`.
-2. Your Pages project → **Settings → Bindings → Add → KV namespace**.
-   Variable name: **`PROJECT_ME`** (exactly). Namespace: `project-me`. Save.
-3. **Deployments** → on the latest deployment choose **Retry deployment**
-   so the binding takes effect.
+1. Go to https://connect.garmin.com/app/settings/personalApiToken → **Create Key**, accept the
+   terms, pick **1 year**, and copy the key (it's shown only once).
+2. In the Codespace terminal (after the `export` lines):
+   `npx wrangler@latest pages secret put GARMIN_API_KEY --project-name project-me`
+   and paste the key. Then publish.
+3. When the key expires (Garmin emails you a week before), create a new one and repeat step 2.
 
-### 5. Put a login in front of it (Cloudflare Access)
-1. In the dashboard sidebar open **Zero Trust**. Pick a team name and the
-   **Free** plan (up to 50 users; it may ask for a card but charges $0).
-2. **Access → Applications → Add an application → Self-hosted**.
-3. Name: `Project Me`. Add the domain `project-me-abc.pages.dev`
-   (yours), and a second one `*.project-me-abc.pages.dev` to cover preview links.
-4. Policy: **Allow**, Include → **Emails** → your email and your wife's.
-5. Leave the login method as **One-time PIN** (a code is emailed to you). Save.
+## Publishing a change
+In the Codespace terminal:
 
-### 6. Check it
-- Open the site in a **private/incognito window**. You should see a Cloudflare
-  sign-in page, not your dashboard. If you see the dashboard, Access isn't
-  covering that address yet: re-check step 5.
-- Sign in with the emailed code. The bottom of the menu should say **Synced**.
-  Tick something, open the site on your phone, and the tick is there.
+```bash
+export CLOUDFLARE_API_TOKEN="your-token"
+export CLOUDFLARE_ACCOUNT_ID="your-account-id"
+git add -A && git commit -m "Update plan" && git push
+npx wrangler@latest pages deploy
+```
 
-Optional extra lock: Pages project → **Settings → Variables** → add
-`ALLOWED_EMAILS` = `you@example.com,wife@example.com`. The sync function will
-then refuse anyone else even if Access is changed by mistake.
+The two `export` lines are only needed once per terminal. Never put the token in a file.
 
 ---
 
@@ -71,9 +70,10 @@ then refuse anyone else even if Access is changed by mistake.
   meds, German, study, notes. Use "Previous day" to fill in a day you missed.
 - **Monthly money check-in** (Finances page): add a snapshot with your wife.
   The KPI cards, net worth trend, debt timeline and savings bars update from it.
-- **Change the plan**: edit `data.js` on GitHub (pencil icon) and commit.
-  The site redeploys in about a minute. Add new tasks at the end of a
-  project's list, because ticks are matched by position.
+- **Change the plan**: edit `public/data.js`, then publish (see above).
+  Add new tasks at the end of a project's list, because ticks are matched by position.
+- **Add a plan document**: in `public/artifacts.js`, find its "todo" entry, paste
+  the plan into `md`, set `status: "ready"`, then publish.
 - **New training plan**: copy one of the two entries in `programs` in
   `data.js` and change the start date, modules and weeks.
 - **Backup**: Settings → Download backup. The database also keeps one
@@ -81,5 +81,5 @@ then refuse anyone else even if Access is changed by mistake.
 
 ## If it says "Not synced"
 Your changes are still saved on that device. Usually the login expired:
-reload the page and sign in again. If it persists, check the KV binding
-name is exactly `PROJECT_ME` and that you retried the deployment after adding it.
+reload the page and sign in again. If it persists, check `wrangler.toml` has
+the right database id and binding `PROJECT_ME`, then publish again.
