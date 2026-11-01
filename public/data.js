@@ -83,16 +83,16 @@ window.PLAN = {
     // ---------------- HEALTH ----------------
     { id: "pt", domain: "health", title: "Pass the PT test (aim 80-85+)", target: "Feb 2027", targetDate: "2027-02-28", tasks: [
       T("Build the 18-week conditioning plan", "Oct 2026", "2026-10-10", "x"),
-      T("Start the plan", "12 Oct 2026", "2026-10-12"),
+      T("Start the plan", "2 Nov 2026", "2026-11-02"),
       T("Confirm the exact test date with my unit", "Dec 2026", "2026-12-31"),
-      T("Full practice HAMR (week 15)", "22 Jan 2027", "2027-01-22"),
+      T("Full practice HAMR (week 15)", "12 Feb 2027", "2027-02-12"),
       T("Take the test; record scores on the Training page", "by 28 Feb 2027", "2027-02-28"),
     ]},
     { id: "sprint", domain: "health", title: "Complete a sprint triathlon (Berlin)", target: "Jun 2027", targetDate: "2027-06-06", tasks: [
       T("Choose the race and register (popular races fill early)", "Nov 2026", "2026-11-30"),
       T("Find a pool; test whether I can swim 750m continuously (easy test swim)", "Dec 2026", "2026-12-31"),
       T("If not, line up swim lessons or a masters group for right after the PT test", "Jan 2027", "2027-01-31"),
-      T("Upload the sprint tri plan (16 weeks, starts 15 Feb 2027)", "Oct 2026", "2026-10-31", "x"),
+      T("Upload the sprint tri plan (now 14 weeks, starts 1 Mar 2027 after the PT test)", "Oct 2026", "2026-10-31", "x"),
       T("Bike check: confirm with a photo of my actual bike that no new bike is needed", "Oct 2026", "2026-10-31", "~"),
       T("Race-prep the hybrid: rack/panniers/kickstand off, tires pumped, saddle height set", "Jan 2027", "2027-01-31"),
       T("Optional: narrower, slicker tires (cheapest real speed gain)", "Feb 2027", "2027-02-28"),
@@ -307,7 +307,7 @@ window.PLAN = {
      standalone half-marathon and marathon races, so both are shown.
      ------------------------------------------------------------------------ */
   endurance: [
-    { id: "pttest",   name: "PT test",            when: "Feb 2027",         date: "2027-02-14", project: "pt",       detail: "Goal 80-85+ (75 to pass). Baseline 83." },
+    { id: "pttest",   name: "PT test",            when: "Late Feb 2027",    date: "2027-02-26", project: "pt",       detail: "Goal 80-85+ (75 to pass). Baseline 83." },
     { id: "sprint",   name: "Sprint triathlon",   when: "5-6 Jun 2027",     date: "2027-06-05", project: "sprint",   detail: "750m swim · 20 km bike · 5 km run (Berlin)", includes: "5K" },
     { id: "halfmar",  name: "Half-marathon",      when: "Fall 2027",        date: "2027-10-15", project: "halfmar",  detail: "21.1 km" },
     { id: "olympic",  name: "Olympic triathlon",  when: "Summer 2028",      date: "2028-07-15", project: "olympic",  detail: "1.5 km swim · 40 km bike · 10 km run", includes: "10K" },
@@ -324,14 +324,14 @@ window.PLAN = {
   programs: [
     {
       id: "pt", name: "PT Test Conditioning Plan", project: "pt",
-      start: "2026-10-12", // Monday of week 1
+      start: "2026-11-02", // Monday of week 1
       skeleton: { Mon: "Base run", Tue: "Push-up strength + short easy run", Wed: "Quality run", Thu: "Sit-up/core + short easy run", Fri: "Easy run or HAMR", "Sat/Sun": "Rest" },
       modules: [
         { name: "A · Foundation", weeks: [1, 3], note: "Ramp-up, HAMR turns" },
         { name: "B · Build", weeks: [4, 8], note: "Volume up, tempo and hills" },
         { name: "C · Sharpen", weeks: [9, 13], note: "Near-max reps, intervals" },
         { name: "D · Peak & Taper", weeks: [14, 16], note: "Volume down ~30%" },
-        { name: "Test window", weeks: [17, 18], note: "Light maintenance; unit sets the date" },
+        { name: "Test week", weeks: [17, 17], note: "Light maintenance; test by 28 Feb" },
       ],
       weeks: [
         { Mon: "2.5 mi easy", Tue: "Push-ups: 5 sets (~5x15)", Wed: "2.5 mi: easy + 4x20 sec relaxed strides", Thu: "Sit-ups: 5x15 + forearm plank 3x30 sec", Fri: "2.5 mi easy" },
@@ -351,28 +351,24 @@ window.PLAN = {
         { Mon: "2.75 mi easy", Tue: "Push-ups: ~4x15, crisp form/speed", Wed: "2.5 mi: easy + 3x20 sec strides", Thu: "Sit-ups: ~4x15 + plank 3x30 sec", Fri: "FULL PRACTICE HAMR at test protocol" },
         { Mon: "2.5 mi easy", Tue: "Push-ups: ~4x15, crisp form/speed", Wed: "2.0 mi: very easy shakeout + relaxed strides", Thu: "Sit-ups: ~4x15 + plank 3x30 sec", Fri: "2.5 mi easy shakeout" },
         { Mon: "2.5 mi easy, stay loose", Tue: "Push-ups: 3x12 crisp reps", Wed: "2 mi easy + 3x20 sec strides", Thu: "Sit-ups: 3x15 + plank 2x30 sec, then 5 min easy shuttles", Fri: "2 mi very easy" },
-        { Mon: "2.5 mi easy, stay loose", Tue: "Push-ups: 3x12 crisp reps", Wed: "15-20 min easy shakeout jog", Thu: "Light mobility only (test may fall this week)", Fri: "Rest if test is next week; otherwise 15 min easy" },
       ],
     },
     {
       id: "sprint", name: "Sprint Triathlon Plan (Berlin)", project: "sprint",
-      start: "2027-02-15",
+      start: "2027-03-01", // straight after the PT test week (14 weeks; original weeks 1 and 5 dropped)
       skeleton: { Mon: "Easy run", Tue: "Bike (bricks from wk 8)", Wed: "Quality run", Thu: "Main swim + PT upkeep", Fri: "Technique swim", "Sat/Sun": "Rest" },
       modules: [
-        { name: "1 · Base", weeks: [1, 4], note: "Water comfort, bike base" },
-        { name: "Recovery", weeks: [5, 5] },
-        { name: "2 · Build", weeks: [6, 9], note: "Longer rides/swims, first bricks" },
-        { name: "Recovery", weeks: [10, 10] },
-        { name: "3 · Race-specific", weeks: [11, 14], note: "Full 750m swim, 20K benchmark, open water" },
-        { name: "Taper", weeks: [15, 15] },
-        { name: "Race week", weeks: [16, 16] },
+        { name: "1 · Base", weeks: [1, 3], note: "Water comfort, bike base (you arrive with a strong run base from PT)" },
+        { name: "2 · Build", weeks: [4, 7], note: "Longer rides/swims, first bricks" },
+        { name: "Recovery", weeks: [8, 8] },
+        { name: "3 · Race-specific", weeks: [9, 12], note: "Full 750m swim, 20K benchmark, open water" },
+        { name: "Taper", weeks: [13, 13] },
+        { name: "Race week", weeks: [14, 14] },
       ],
       weeks: [
-        { Mon: "Run 3.0 mi easy", Tue: "Bike 30 min easy, flat, high cadence", Wed: "Run 3 mi easy + 4x20 sec strides", Thu: "Swim ~200m: 8x25m, 30s rest; exhale underwater + PT upkeep", Fri: "Swim ~150m: kick with board, bubble-blowing, bobbing" },
         { Mon: "Run 3.0 mi easy", Tue: "Bike 35 min easy, flat", Wed: "Run 3 mi fartlek 5x(1 min faster / 1 min easy)", Thu: "Swim ~250m: 10x25m; side-breathing drill + PT upkeep", Fri: "Swim ~200m: kick with board, catch-up drill" },
         { Mon: "Run 3.25 mi easy", Tue: "Bike 40 min easy/steady", Wed: "Run 3.25 mi tempo, 10 min comf. hard", Thu: "Swim ~300m: 6x50m; breathe every 3 + PT upkeep", Fri: "Swim ~250m: fingertip drag, bilateral breathing" },
         { Mon: "Run 3.5 mi easy", Tue: "Bike 45 min steady (~8-9 mi)", Wed: "Run 3.5 mi tempo, 12 min comf. hard", Thu: "Swim ~350m: 7x50m, 25s rest + PT upkeep", Fri: "Swim ~250m: catch-up drill, 25m repeats" },
-        { Mon: "Run 2.5 mi easy", Tue: "Bike 30 min easy", Wed: "Run 2.5 mi easy", Thu: "Swim ~250m easy technique + PT upkeep", Fri: "Swim ~200m very easy" },
         { Mon: "Run 3.5 mi easy", Tue: "Bike 50 min incl. 4x2 min moderate", Wed: "Run 3.5 mi hill repeats 6x45 sec", Thu: "Swim ~400m: 8x50m, 20s rest + PT upkeep", Fri: "Swim ~300m: drills 4x25m, 4x50m easy" },
         { Mon: "Run 3.75 mi easy", Tue: "Bike 55 min incl. 5x2 min moderate", Wed: "Run 3.5 mi tempo, 15 min comf. hard", Thu: "Swim ~450m: 3x100m + 3x50m; sighting + PT upkeep", Fri: "Swim ~350m: drills + 25m repeats" },
         { Mon: "Run 4.0 mi easy", Tue: "Bike 60 min steady + BRICK 10 min run", Wed: "Run 3.75 mi intervals 4x400m at 5K effort", Thu: "Swim ~500m: 5x100m, 20s rest + PT upkeep", Fri: "Swim ~350m: sighting every 6-8 strokes" },
@@ -545,7 +541,7 @@ window.PLAN = {
       { name: "Space 3 (pick in Nov)", month: "2027-03", tasks: ["Fully unpacked", "Art and photos up", "Small annoyances fixed"] },
     ],
     rule222Start: "2026-11-07",
-    studyStart: "2026-11-02",
+    studyStart: "2026-09-07", // Year 1 began here; block 3 (after half-term) starts 2 Nov
     bucket: [],
     countries: [],
   },
